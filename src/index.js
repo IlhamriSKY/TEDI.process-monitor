@@ -78,6 +78,15 @@ export async function activate(context) {
   // and says what it is doing.
   render(null, 0);
 
+  // Everything past here is a shell spawn, and `activate` is awaited by the
+  // loader: awaiting the RAM read and the first sample here held boot for ~3.6 s
+  // and earned the host's "move slow work off the activate path" warning. The
+  // meter is already on screen saying "Reading...", so this can run behind it.
+  void start();
+}
+
+/** First sample, off the activation path. */
+async function start() {
   totalMem = await readTotalMemory(isWindows());
   if (!state.active) return;
   await poll();

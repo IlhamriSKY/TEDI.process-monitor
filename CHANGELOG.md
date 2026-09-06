@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1
+
+- **Activation no longer holds TEDI's boot for three and a half seconds.** The
+  first sample reads total RAM and enumerates every process, both of which are
+  shell spawns, and `activate` is awaited by the extension loader - so the whole
+  app waited on them and the host logged "move slow work off the activate path".
+  The meter is drawn before any of it now and fills itself in behind the reading
+  it already shows.
+
 ## 0.1.0
 
 First release.

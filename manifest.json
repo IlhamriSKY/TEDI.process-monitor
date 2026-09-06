@@ -2,7 +2,7 @@
   "$schema": "./manifest.schema.json",
   "id": "tedi.process-monitor",
   "name": "Process Monitor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A task manager scoped to TEDI. Shows the whole process tree the app owns: the window, the WebView2 renderer, the PTY daemon, every terminal shell and everything those shells started, plus the extension sidecars. AI CLIs attached to a terminal (Claude Code, Codex, Gemini, opencode and friends) are called out with their own badge. The status bar carries the tree's total memory and a live CPU reading; clicking it opens the full tree with per-process CPU and memory. Reads the OS process table once per poll; nothing is killed, written or sent anywhere.",
   "author": "IlhamRiski - ilhamriski.com",
   "homepage": "https://tedi.ilhamriski.com/",
