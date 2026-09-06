@@ -1,0 +1,18 @@
+{
+  "name": "tedi-process-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Build tooling for the TEDI Process Monitor extension. The shipped artifact is the bundled extension.js (built in CI into the release .zip, not committed); source lives in src/.",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "check": "node --check extension.js",
+    "test": "node src/procs.test.mjs",
+    "typecheck": "tsc -p jsconfig.json"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.0"
+  }
+}

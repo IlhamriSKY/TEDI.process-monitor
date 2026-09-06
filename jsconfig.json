@@ -1,0 +1,15 @@
+{
+  "//": "Turns on type checking for plain JavaScript, so `tedi.d.ts` actually bites: a typo in a `ctx.*` call is a red squiggle in the editor instead of a runtime TypeError inside an async onClick, which is the single most common way an extension breaks invisibly. No install needed - any TypeScript-aware editor reads this file. `types: []` is here because this folder sits inside the TEDI repo, whose node_modules is on the resolution path: without it tsc pulls in every @types package it finds up there and type-checks their JavaScript. The extension imports nothing but tedi.d.ts and the DOM.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "checkJs": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["src/**/*.js", "tedi.d.ts"]
+}
