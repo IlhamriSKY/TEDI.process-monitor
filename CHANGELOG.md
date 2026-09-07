@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.1.2
+
+- **The pane is TEDI and the terminals you opened, and nothing else.** Sixty-
+  seven rows was a wall, and most of it was somebody's plumbing: WebView2
+  children, extension sidecars, a conhost per ConPTY, and the whole tool tree an
+  agent starts under itself. Those are gone as rows and **summed into the row
+  that owns them**, so nothing is hidden - a terminal now weighs what the shell
+  and everything it started weigh together, the column still adds up to the
+  entire tree, and a `+N` on each row says how many processes it is speaking
+  for. Sixty-seven processes read as five rows that still total 5.2G.
+- **A terminal says what is running in it.** Five identical `pwsh` rows told you
+  nothing; the row now carries the agent's name, or the heaviest thing under it,
+  and wears the `agent` badge when an AI CLI is attached. Which of them is
+  holding two gigabytes is the whole question, and it is now the first thing on
+  the row.
+- **The `live` / `every 5s` indicator is gone.** It reported which sampler was
+  running, which is the extension's business and never the reader's.
+- **The hover bubble follows the cursor instead of the row.** Rows are 21 px
+  tall in a list that scrolls, so a bubble hung off the row's box landed over
+  its neighbours and read as belonging to one of them. It now opens just above
+  the pointer, flipping below only when there is no room above.
+- **Fixed: a process exiting mid-tree left a hole in it.** A numbers-only block
+  drops the process that exited but keeps its descendants, which are alive and
+  still cost memory. They were left pointing at a dead pid, so the tree had a
+  hole in it and anything walking parentage fell through: before this release
+  that showed as a row indented under nothing, and with rows now summing their
+  subtrees it would have quietly dropped up to a gigabyte for the ~7 seconds
+  until the next full block. Survivors are re-parented onto the exited
+  process's own parent, and the whole subtree moves up with it. Seven of every
+  eight blocks are numbers-only ones, so this is the path the pane spends its
+  life on, and the tests now cover it.
+
 ## 0.1.1
 
 - **Activation no longer holds TEDI's boot for three and a half seconds.** The

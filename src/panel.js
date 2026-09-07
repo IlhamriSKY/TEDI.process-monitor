@@ -1,5 +1,11 @@
-// The Processes pane: a live memory chart over the whole tree, one row per
-// process, indented by depth.
+// The Processes pane: a live memory chart over the whole tree, and under it one
+// row for TEDI, one for its PTY daemon, and one for each terminal you opened.
+//
+// The rows come from `collapse` (procs.js), not from the snapshot directly: the
+// snapshot is the full per-pid tree and every process not on that short list is
+// SUMMED into the row that owns it. So the pane is short without being a lie -
+// the memory column still adds up to the whole tree, and a `+N` on each row
+// says how many processes it is speaking for.
 //
 // Painted as plain DOM with a single `<style>` block; every class is `tpm-`
 // prefixed and every colour comes from the host's design tokens, so the pane
@@ -14,7 +20,7 @@
 // second, which makes the pane unreadable exactly when it is most alive.
 
 import { ctx, state } from "./runtime.js";
-import { fmtBytes, fmtPct } from "./procs.js";
+import { collapse, fmtBytes, fmtPct } from "./procs.js";
 import { pixelSeries } from "./chart.js";
 
 const STYLE_ID = "tpm-styles";
@@ -37,10 +43,6 @@ const CSS = `
 .tpm-chips { display: flex; align-items: center; gap: 8px; color: var(--muted-foreground); min-width: 0; overflow: hidden; white-space: nowrap; }
 .tpm-chips > span + span::before { content: "·"; margin-right: 8px; opacity: 0.6; }
 .tpm-chips > span:first-child { color: var(--foreground); font-weight: 600; }
-.tpm-live { display: inline-flex; align-items: center; gap: 5px; color: var(--muted-foreground); font-size: 10px; }
-.tpm-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); }
-.tpm-live.is-live .tpm-dot { background: var(--primary, #3b82f6); animation: tpm-pulse 2s ease-in-out infinite; }
-@keyframes tpm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .tpm-spacer { flex: 1 1 auto; }
 .tpm-btn { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 1px solid transparent; border-radius: var(--radius, 0); background: var(--tedi-button-face, color-mix(in srgb, var(--foreground) 18%, transparent)); color: var(--tedi-button-face-foreground, var(--foreground)); font: inherit; font-size: 11px; cursor: pointer; outline: none; }
 .tpm-btn:hover:not([disabled]) { background: var(--tedi-button-face-hover, color-mix(in srgb, var(--foreground) 28%, transparent)); }
@@ -78,10 +80,14 @@ const CSS = `
 .tpm-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted-foreground); }
 .tpm-num.is-hot { color: var(--foreground); }
 .tpm-badge { flex: 0 0 auto; padding: 0 5px; border-radius: var(--radius, 0); background: color-mix(in srgb, var(--primary, #3b82f6) 18%, transparent); color: var(--primary, #3b82f6); font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; line-height: 15px; }
+/* How many processes this row is speaking for. Quieter than the sub: it is a
+   footnote on the memory column, not part of the name. */
+.tpm-rolled { flex: 0 0 auto; color: var(--muted-foreground); opacity: 0.65; font-variant-numeric: tabular-nums; }
+/* The badge, the sub and the count are always in the DOM so a row can gain or
+   lose one without being rebuilt; empty ones take no space. */
+.tpm-badge:empty, .tpm-sub:empty, .tpm-rolled:empty { display: none; }
 .tpm-row[data-role="app"] .tpm-label, .tpm-row[data-role="daemon"] .tpm-label { font-weight: 600; }
-.tpm-row[data-role="agent"] .tpm-label { color: var(--primary, #3b82f6); font-weight: 600; }
-.tpm-row[data-role="webview"] .tpm-label, .tpm-row[data-role="child"] .tpm-label { color: var(--muted-foreground); }
-.tpm-row[data-role="monitor"] { opacity: 0.7; font-style: italic; }
+.tpm-row[data-role="terminal"] .tpm-label { color: var(--foreground); }
 .tpm-note { padding: 16px; color: var(--muted-foreground); line-height: 1.5; }
 
 /* --- Tooltip ----------------------------------------------------------
@@ -97,6 +103,7 @@ const CSS = `
 .tpm-tip.is-open { opacity: 1; transform: scale(1); }
 .tpm-tip-title { font-weight: 600; }
 .tpm-tip-cmd { color: var(--muted-foreground); font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; margin-top: 3px; white-space: pre-wrap; }
+.tpm-tip-more { color: var(--muted-foreground); margin-top: 5px; }
 `;
 
 export function injectStyles() {
@@ -129,6 +136,10 @@ export function removeStyles() {
 const TIP_DELAY_MS = 200;
 const TIP_OFFSET = 6;
 const TIP_EDGE = 8;
+/** Clearance under the pointer for the flipped case. The cursor's hotspot is
+ *  the arrow's TIP, and the glyph hangs down-right from it, so 6 px above the
+ *  hotspot is already clear air while 6 px below is still under the arrow. */
+const TIP_CURSOR = 20;
 
 /** @type {HTMLElement | null} */
 let tipEl = null;
@@ -138,6 +149,13 @@ let tipTimer = null;
  *  restart it and moving between rows does not re-wait the delay - the same
  *  "skip delay" feel the host's tooltip provider gives dense icon strips. */
 let tipRow = /** @type {HTMLElement | null} */ (null);
+/** Where the pointer is. The bubble is anchored to the CURSOR rather than to
+ *  the row, because a row is 21 px tall in a list that scrolls: a bubble hung
+ *  off the row's box lands over the neighbouring rows and reads as belonging to
+ *  one of them. Above the pointer is the one place it never covers what you are
+ *  pointing at. */
+let tipX = 0;
+let tipY = 0;
 
 function tipNode() {
   if (tipEl?.isConnected) return tipEl;
@@ -153,23 +171,32 @@ function openTip(row) {
   const title = el("div", "tpm-tip-title", row.dataset.tipTitle ?? "");
   tip.replaceChildren(title);
   if (row.dataset.tipCmd) tip.append(el("div", "tpm-tip-cmd", row.dataset.tipCmd));
+  // A collapsed row owes the reader an account of what it is standing in for.
+  if (row.dataset.tipMore) tip.append(el("div", "tpm-tip-more", row.dataset.tipMore));
 
-  // Measure with the bubble laid out but still invisible, then place it: below
-  // the row by default, flipped above when it would fall off the bottom, and
-  // clamped horizontally so a row at the pane's edge cannot push it off-screen.
+  // Measure with the bubble laid out but still invisible, then place it above
+  // the pointer, centred on it, flipped below only when there is no room, and
+  // clamped horizontally so a cursor at the window's edge cannot push it
+  // off-screen.
   tip.classList.add("is-open");
-  const r = row.getBoundingClientRect();
   const t = tip.getBoundingClientRect();
   const maxX = window.innerWidth - t.width - TIP_EDGE;
-  const x = Math.max(
-    TIP_EDGE,
-    Math.min(r.left + r.width / 2 - t.width / 2, Math.max(TIP_EDGE, maxX)),
-  );
-  let y = r.bottom + TIP_OFFSET;
-  if (y + t.height > window.innerHeight - TIP_EDGE) y = r.top - t.height - TIP_OFFSET;
-  tip.style.transformOrigin = y < r.top ? "bottom center" : "top center";
+  const x = Math.max(TIP_EDGE, Math.min(tipX - t.width / 2, Math.max(TIP_EDGE, maxX)));
+  let y = tipY - t.height - TIP_OFFSET;
+  const above = y >= TIP_EDGE;
+  if (!above) y = tipY + TIP_CURSOR;
+  tip.style.transformOrigin = above ? "bottom center" : "top center";
   tip.style.left = `${Math.round(x)}px`;
   tip.style.top = `${Math.round(Math.max(TIP_EDGE, y))}px`;
+}
+
+/** Repaint the bubble if it is the one describing this row. A row's numbers and
+ *  its rolled-up count move every second under a stationary cursor, and a
+ *  tooltip still saying "+10" over a row that now reads "+14" is worse than no
+ *  tooltip. Placement is redone with it, because new text is a new size.
+ *  @param {HTMLElement} row */
+function refreshTip(row) {
+  if (tipRow === row && tipEl?.classList.contains("is-open")) openTip(row);
 }
 
 function hideTip() {
@@ -185,8 +212,18 @@ export function removeTip() {
   tipEl = null;
 }
 
+/** Record the pointer for the next `openTip`. Separate from `onHover` because
+ *  that one returns early while the pointer stays on one row, and the bubble
+ *  still has to open where the pointer ENDED UP after the 200 ms wait.
+ *  @param {MouseEvent} ev */
+function trackPointer(ev) {
+  tipX = ev.clientX;
+  tipY = ev.clientY;
+}
+
 /** @param {MouseEvent} ev */
 function onHover(ev) {
+  trackPointer(ev);
   const target = ev.target instanceof Element ? ev.target.closest(".tpm-row") : null;
   const row = target instanceof HTMLElement ? target : null;
   if (row === tipRow) return;
@@ -225,9 +262,6 @@ export function mount(container) {
   // No title of its own: the pane header already says "Processes", and the
   // summary is the thing worth reading here.
   const chips = el("div", "tpm-chips");
-  const live = el("div", "tpm-live");
-  const liveText = el("span", "", "live");
-  live.append(el("span", "tpm-dot"), liveText);
   const refresh = document.createElement("button");
   refresh.className = "tpm-btn";
   refresh.type = "button";
@@ -239,7 +273,7 @@ export function mount(container) {
     refresh.textContent = "Reading...";
     state.onRefresh?.();
   });
-  bar.append(chips, el("div", "tpm-spacer"), live, refresh);
+  bar.append(chips, el("div", "tpm-spacer"), refresh);
 
   const chart = buildChart();
 
@@ -256,6 +290,7 @@ export function mount(container) {
   // than `mouseenter` for the same reason. Scrolling hides the bubble instead
   // of letting it float beside the row it no longer points at.
   body.addEventListener("mouseover", onHover);
+  body.addEventListener("mousemove", trackPointer, { passive: true });
   body.addEventListener("mouseleave", hideTip);
   body.addEventListener("scroll", hideTip, { passive: true });
   card.append(bar, chart.root, head, body);
@@ -270,10 +305,6 @@ export function mount(container) {
   const paint = () => {
     const snap = state.last;
     refresh.textContent = "Refresh";
-    // The dot alone would leave a grey "live" reading as broken; say which
-    // mode is actually running.
-    live.classList.toggle("is-live", !!state.stream);
-    liveText.textContent = state.stream ? "live" : "every 5s";
     chips.replaceChildren();
     if (!snap) {
       signature = "";
@@ -297,16 +328,21 @@ export function mount(container) {
     );
     chart.draw(state.history, snap.rss);
 
-    const sig = snap.nodes.map((n) => `${n.pid}:${n.depth}`).join(",");
+    // TEDI and the terminals you opened; everything else is summed into the row
+    // that owns it. The signature is still only pid + depth, so a shell that
+    // starts and stops a process every second refreshes its numbers in place
+    // instead of throwing away the row you are hovering.
+    const shown = collapse(snap.nodes);
+    const sig = shown.map((n) => `${n.pid}:${n.depth}`).join(",");
     if (sig === signature) {
-      for (const n of snap.nodes) updateRow(rows.get(n.pid), n);
+      for (const n of shown) updateRow(rows.get(n.pid), n);
       return;
     }
     signature = sig;
     rows = new Map();
     const top = body.scrollTop;
     body.replaceChildren(
-      ...snap.nodes.map((n) => {
+      ...shown.map((n) => {
         const row = rowOf(n);
         rows.set(n.pid, row);
         return row.root;
@@ -456,42 +492,73 @@ function buildChart() {
 // Rows
 // ---------------------------------------------------------------------------
 
-/** @typedef {{ root: HTMLElement, cpu: HTMLElement, mem: HTMLElement }} Row */
+/** @typedef {{ root: HTMLElement, badge: HTMLElement, sub: HTMLElement,
+ *              rolled: HTMLElement, cpu: HTMLElement, mem: HTMLElement }} Row */
 
-/** @param {import("./procs.js").ProcNode} n @returns {Row} */
+/** @param {import("./procs.js").CollapsedNode} n @returns {Row} */
 function rowOf(n) {
   const root = el("div", "tpm-row");
   root.dataset.role = n.role;
-  // The full command line is the answer to "what IS that node process", and the
-  // hover bubble is the one place to put 240 characters without a second pane.
-  // Carried on the element rather than closed over, so the delegated handler
-  // works for rows this render did not create.
-  root.dataset.tipTitle = `${n.label}${n.sub ? ` · ${n.sub}` : ""}  ·  pid ${n.pid}`;
-  root.dataset.tipCmd = n.cmd || n.name;
 
   const name = el("div", "tpm-name");
   name.style.paddingLeft = `${n.depth * 13}px`;
-  name.append(el("span", "tpm-label", n.label));
-  if (n.role === "agent") name.append(el("span", "tpm-badge", "agent"));
-  if (n.sub) name.append(el("span", "tpm-sub", n.sub));
+  const badge = el("span", "tpm-badge");
+  const sub = el("span", "tpm-sub");
+  const rolled = el("span", "tpm-rolled");
+  name.append(el("span", "tpm-label", n.label), badge, sub, rolled);
 
   const cpu = el("div", "tpm-num");
   const mem = el("div", "tpm-num");
   root.append(name, el("div", "tpm-num", String(n.pid)), cpu, mem);
-  const row = { root, cpu, mem };
+  const row = { root, badge, sub, rolled, cpu, mem };
   updateRow(row, n);
   return row;
 }
 
-/** @param {Row | undefined} row @param {import("./procs.js").ProcNode} n */
+/**
+ * Everything that can change without the row set changing, refreshed in place.
+ * That is not only the numbers: a terminal folds its whole subtree into itself,
+ * so the count it hides and the name of what is running in it move while the
+ * row stays put.
+ * @param {Row | undefined} row @param {import("./procs.js").CollapsedNode} n
+ */
 function updateRow(row, n) {
   if (!row) return;
+  // The badge follows what is INSIDE the row now, not the row's own role: an
+  // agent is never a row of its own here, it is the reason one terminal weighs
+  // a gigabyte and its neighbour weighs eighty megabytes.
+  set(row.badge, n.inside.length > 0 ? "agent" : "");
+  set(row.sub, n.sub);
+  set(row.rolled, n.rolled > 0 ? `+${n.rolled}` : "");
+
+  // The full command line is the answer to "what IS that node process", and the
+  // hover bubble is the one place to put 240 characters without a second pane.
+  // Carried on the element rather than closed over, so the delegated handler
+  // works for rows this render did not create - and rewritten here, because a
+  // row survives changes to everything in it.
+  const title = `${n.label}${n.sub ? ` · ${n.sub}` : ""}  ·  pid ${n.pid}`;
+  const more =
+    n.rolled > 0
+      ? `Includes ${n.rolled} more ${n.rolled === 1 ? "process" : "processes"} started by this one, counted in its memory and CPU.`
+      : "";
+  const moved = row.root.dataset.tipTitle !== title || row.root.dataset.tipMore !== more;
+  row.root.dataset.tipTitle = title;
+  row.root.dataset.tipCmd = n.cmd || n.name;
+  row.root.dataset.tipMore = more;
+  if (moved) refreshTip(row.root);
+
   const cpu = n.cpuPct == null ? "-" : fmtPct(n.cpuPct);
   if (row.cpu.textContent !== cpu) row.cpu.textContent = cpu;
   row.cpu.classList.toggle("is-hot", n.cpuPct != null && n.cpuPct >= 5);
   const mem = fmtBytes(n.rss);
   if (row.mem.textContent !== mem) row.mem.textContent = mem;
   row.mem.classList.toggle("is-hot", n.rss >= 256 * 1024 * 1024);
+}
+
+/** Write only on a change: an unconditional assignment every second is a style
+ *  recalc on a row nobody touched. @param {HTMLElement} node @param {string} text */
+function set(node, text) {
+  if (node.textContent !== text) node.textContent = text;
 }
 
 /** Re-render every mounted pane. */

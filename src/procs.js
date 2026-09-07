@@ -23,6 +23,10 @@ import { ctx } from "./runtime.js";
 /** @typedef {"app"|"daemon"|"webview"|"terminal"|"agent"|"ext"|"monitor"|"child"} Role */
 /** @typedef {RawProc & { depth: number, role: Role, label: string, sub: string, cpuPct: number | null }} ProcNode */
 
+/** A row as the pane draws it: one kept process carrying the memory, the CPU
+ *  and the pids of everything folded into it. See `collapse`. */
+/** @typedef {ProcNode & { pids: number[], rolled: number, inside: string[] }} CollapsedNode */
+
 /** @typedef {{ at: number, nodes: ProcNode[], count: number, rss: number, cpuPct: number | null, agents: string[] }} Snapshot */
 
 // Truncating the command line in the shell rather than here keeps the payload
@@ -298,9 +302,40 @@ export function applyLight(snap, light, prev, at, dtMs, ncpu) {
   let cpuKnown = false;
   /** @type {string[]} */
   const agents = [];
+  /**
+   * Where an exited node's children go.
+   *
+   * A light block drops the node itself but NOT its descendants: those are
+   * still alive and still cost memory, so they stay. Leaving them pointing at a
+   * dead pid would hand every consumer a tree with a HOLE in it, and anything
+   * that walks parentage then loses (or misattributes) the entire subtree under
+   * the hole. An agent exiting while its tool tree lives on for one beat is the
+   * commonest transient there is, and it is worth a gigabyte.
+   *
+   * So a dropped node's children are re-parented onto ITS parent, and depth is
+   * recomputed from the surviving parent rather than patched by an offset: a
+   * whole subtree moves up, not just the orphan's own row. Pre-order guarantees
+   * a parent is visited before its children, so both maps are always in place
+   * by the time they are read, and the stored ppid is already resolved, so one
+   * lookup walks a chain of any length.
+   * @type {Map<number, number>} dead pid -> the pid its children inherit
+   */
+  const lifted = new Map();
+  /** @type {Map<number, number>} surviving pid -> its depth in the new tree */
+  const depthOf = new Map();
   for (const n of snap.nodes) {
+    const ppid = lifted.get(n.ppid) ?? n.ppid;
     const now = light.get(n.pid);
-    if (!now) continue; // exited since the last full block
+    if (!now) {
+      // Exited since the last full block.
+      lifted.set(n.pid, ppid);
+      continue;
+    }
+    // A parent outside the map is a parent outside the tree, so this node is a
+    // root of it - which is exactly right for a node whose whole ancestry went.
+    const up = depthOf.get(ppid);
+    const depth = up === undefined ? 0 : up + 1;
+    depthOf.set(n.pid, depth);
     const was = prev?.get(n.pid);
     let cpuPct = n.cpuPct;
     if (was && dtMs > 0) {
@@ -310,7 +345,7 @@ export function applyLight(snap, light, prev, at, dtMs, ncpu) {
       );
       cpuPct = Math.round(cpuPct * 10) / 10;
     }
-    const node = { ...n, rss: now.rss, cpuPct };
+    const node = { ...n, ppid, depth, rss: now.rss, cpuPct };
     nodes.push(node);
     rss += node.rss;
     if (cpuPct != null) {
@@ -482,6 +517,100 @@ export function buildSnapshot(rows, prev, at, ncpu) {
     cpuPct: cpuKnown ? Math.min(100, Math.round(cpu * 10) / 10) : null,
     agents,
   };
+}
+
+/**
+ * The roles that earn a row of their own in the pane: TEDI itself (the window
+ * and the PTY daemon) and the terminals you opened.
+ *
+ * Everything else is somebody's implementation detail - the WebView2 children,
+ * the extension sidecars, the conhost each ConPTY drags along, and everything a
+ * shell went on to start. Those are the rows that made the pane a wall of
+ * forty, and none of them is a thing you opened.
+ */
+const ROW_ROLES = new Set(["app", "daemon", "terminal"]);
+
+/**
+ * Fold the full tree down to those rows.
+ *
+ * Nothing is dropped, only SUMMED: a rolled process adds its memory and its CPU
+ * to the nearest ancestor that keeps a row, so the column still adds up to the
+ * whole tree and the pane cannot understate the thing it exists to report. A
+ * terminal row therefore weighs what the shell and everything it started weigh
+ * together, which is the number you actually want when an agent inside it is
+ * holding a gigabyte.
+ *
+ * Pure, and applied at PAINT time rather than inside `buildSnapshot`: the
+ * snapshot stays the full per-pid tree, so the light blocks keep refreshing
+ * every process by pid and the totals, the status bar and the chart are
+ * untouched by what the pane chooses to show.
+ *
+ * @param {ProcNode[]} nodes a full tree, in pre-order with `depth`
+ * @returns {CollapsedNode[]}
+ */
+export function collapse(nodes) {
+  /** @type {CollapsedNode[]} */
+  const out = [];
+  /**
+   * The row each pid belongs to: the row it IS, or the row it was folded into.
+   *
+   * Keyed by PID rather than by depth. A depth-indexed ancestor lookup ("the
+   * last node written one level up is my parent") is only sound while the input
+   * is a contiguous pre-order walk, and it is not always: a light block can
+   * remove a node from the middle of the tree. `applyLight` now re-parents the
+   * survivors so that does not happen, but this lookup is exact either way, and
+   * a pane whose whole job is reporting memory should not depend on two things
+   * being right to avoid losing a gigabyte.
+   * @type {Map<number, CollapsedNode>}
+   */
+  const host = new Map();
+  /** Heaviest rolled descendant per row, to name what is inside it.
+   *  @type {Map<CollapsedNode, ProcNode>} */
+  const heaviest = new Map();
+
+  for (const n of nodes) {
+    const parent = host.get(n.ppid) ?? null;
+    // A node with no surviving ancestor becomes a row of its own rather than
+    // vanishing. This pane may be short; it may never be short by hiding
+    // memory. Normally only the app processes take this path.
+    if (!parent || ROW_ROLES.has(n.role)) {
+      const row = {
+        ...n,
+        depth: parent ? parent.depth + 1 : 0,
+        pids: [n.pid],
+        rolled: 0,
+        inside: /** @type {string[]} */ ([]),
+      };
+      out.push(row);
+      host.set(n.pid, row);
+      continue;
+    }
+    host.set(n.pid, parent);
+    parent.pids.push(n.pid);
+    parent.rolled += 1;
+    parent.rss += n.rss;
+    if (n.cpuPct != null) parent.cpuPct = (parent.cpuPct ?? 0) + n.cpuPct;
+    // An attached agent is the one hidden process worth naming by itself; for
+    // anything else the biggest one is the honest answer to "what is in there".
+    if (n.role === "agent") {
+      const name = n.sub || n.label;
+      if (name && !parent.inside.includes(name)) parent.inside.push(name);
+    }
+    const big = heaviest.get(parent);
+    if (!big || n.rss > big.rss) heaviest.set(parent, n);
+  }
+
+  for (const row of out) {
+    // Sum-then-round: rounding each contribution first would drift by up to
+    // 0.05 per rolled process, and a terminal can hold twenty.
+    if (row.cpuPct != null) row.cpuPct = Math.min(100, Math.round(row.cpuPct * 10) / 10);
+    if (row.role !== "terminal" || row.sub) continue;
+    // A shell is only ever "pwsh" or "bash"; what is RUNNING in it is the thing
+    // that tells one terminal from another, and it is free here.
+    const big = heaviest.get(row);
+    row.sub = row.inside.join(", ") || (big ? big.sub || big.label : "");
+  }
+  return out;
 }
 
 /**

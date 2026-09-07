@@ -1,10 +1,13 @@
 // Process Monitor - a task manager scoped to TEDI.
 //
 // One status-bar meter (total memory of everything TEDI owns, plus a live CPU
-// figure in its tooltip) and one pane holding a memory chart and the whole
-// process tree: the window, the WebView2 renderer, the PTY daemon, every
-// terminal shell and everything those shells started - which is where an
-// attached Claude Code or Codex shows up, badged as an agent.
+// figure in its tooltip) and one pane holding a memory chart and the short
+// version of where that memory went: TEDI, its PTY daemon, and one row per
+// terminal you opened. The WebView2 children, the sidecars and everything a
+// shell started are SUMMED into the row that owns them rather than listed, so
+// the pane is five rows instead of sixty and still adds up to the whole tree -
+// which is how an attached Claude Code or Codex shows up, as the reason one
+// terminal weighs two gigabytes. See `collapse` in procs.js.
 //
 // Two sampling modes, because the cost of reading the process table is all in
 // the process you spawn to read it:

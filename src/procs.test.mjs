@@ -15,6 +15,7 @@ import {
   parseLight,
   applyLight,
   buildSnapshot,
+  collapse,
   cpuSampleOf,
   dropSelf,
   scriptToken,
@@ -175,6 +176,72 @@ const restarted = buildSnapshot(
 );
 assert.equal(restarted.nodes.find((n) => n.pid === 8016).cpuPct, null);
 
+// --- collapse ----------------------------------------------------------
+// What the pane draws: TEDI and the terminals you opened. Everything else is
+// summed into the row that owns it, so the one property worth guarding is that
+// NOTHING goes missing - a monitor that hides a gigabyte is worse than no
+// monitor.
+const shown = collapse(snap.nodes);
+const shownBy = new Map(shown.map((n) => [n.pid, n]));
+assert.deepEqual(
+  shown.map((n) => n.pid),
+  [15264, 2504, 26788, 31336, 9100, 9101],
+  "the window, its daemon, the two shells under it, then the orphaned daemon and its shell",
+);
+assert.equal(
+  shown.reduce((s, n) => s + n.rss, 0),
+  snap.rss,
+  "a collapsed tree weighs exactly what the full tree weighs",
+);
+assert.equal(
+  shown.reduce((s, n) => s + n.pids.length, 0),
+  snap.count,
+  "and accounts for every process exactly once",
+);
+assert.ok(!shown.some((n) => n.pid === 13740), "a webview is not a row of its own");
+assert.ok(!shown.some((n) => n.pid === 8016), "nor is an agent");
+assert.ok(!shown.some((n) => n.pid === 17128), "nor is a conhost");
+
+// A terminal weighs the shell plus everything the shell started.
+assert.equal(shownBy.get(26788).rolled, 4, "the agent, its cmd shim and two node processes");
+assert.equal(
+  shownBy.get(26788).rss,
+  [26788, 8016, 17852, 15364, 23904].reduce((s, pid) => s + byPid.get(pid).rss, 0),
+);
+assert.deepEqual(shownBy.get(26788).pids, [26788, 8016, 17852, 15364, 23904]);
+assert.deepEqual(shownBy.get(26788).inside, ["claude"], "and it names the agent inside it");
+assert.equal(shownBy.get(26788).sub, "claude", "which is what tells one shell from another");
+assert.deepEqual(shownBy.get(31336).inside, ["claude-code"]);
+assert.equal(shownBy.get(9101).rolled, 0, "an empty shell hides nothing");
+assert.equal(shownBy.get(9101).sub, "", "and so claims to be running nothing");
+assert.equal(shownBy.get(15264).rolled, 3, "the window carries its webviews and its sidecar");
+assert.equal(shownBy.get(2504).sub, "pty daemon", "a role's own sub survives the fold");
+
+// Depth is the depth of the COLLAPSED tree: claude sat at 3 and is gone, so its
+// shell must not leave a hole where the indentation used to be.
+assert.deepEqual(
+  shown.map((n) => n.depth),
+  [0, 1, 2, 2, 0, 1],
+);
+
+// Pure: the pane re-folds the SAME snapshot on every paint (and a light block
+// hands back the same node objects), so a collapse that added into its input
+// would ratchet the numbers up once a second.
+assert.equal(
+  collapse(snap.nodes).reduce((s, n) => s + n.rss, 0),
+  snap.rss,
+  "folding twice must not double anything",
+);
+
+// CPU rolls up the same way, summed then rounded once.
+const busyShown = collapse(later.nodes).find((n) => n.pid === 26788);
+assert.equal(busyShown.cpuPct, 12.5, "the shell reports the CPU its agent is burning");
+assert.equal(
+  collapse(snap.nodes).find((n) => n.pid === 26788).cpuPct,
+  null,
+  "and reports nothing at all before there are two samples to difference",
+);
+
 // --- unix parsing ------------------------------------------------------
 const unix = parseUnix(
   [
@@ -270,6 +337,63 @@ assert.equal(folded.nodes.find((n) => n.pid === 8016).rss, 600 << 20, "memory is
 assert.equal(folded.nodes.find((n) => n.pid === 8016).cpuPct, 12.5, "one core of eight, over 2 s");
 assert.equal(folded.rss, snap.rss - (229 << 20) + (600 << 20) - (559 << 20));
 assert.deepEqual(folded.agents, snap.agents, "roles survive a light block");
+
+// A light block drops the process that exited but NOT its descendants: those
+// are alive and still cost memory. Re-parenting them onto its parent is what
+// keeps the tree walkable - leave the hole and anything that follows parentage
+// loses the whole subtree under it, which on a real machine is the agent's tool
+// tree and a gigabyte with it. Seven of every eight blocks are light ones, so
+// this is the path the pane spends its life on.
+const shownPids = collapse(snap.nodes).map((n) => n.pid);
+for (const [dead, label, sameRows] of [
+  [8016, "an agent exits, its tool tree lives on", true],
+  [17852, "a cmd shim exits, leaving node behind", true],
+  [23904, "the deepest leaf exits", true],
+  [26788, "the shell itself exits under its own subtree", false],
+  [2504, "the daemon exits, orphaning both terminals", false],
+]) {
+  const gone = new Map(seed);
+  gone.delete(dead);
+  const after = applyLight(snap, gone, seed, T0 + 2000, 2000, 8);
+  const rows = collapse(after.nodes);
+  assert.ok(
+    !after.nodes.some((n) => n.pid === dead),
+    `${label}: the dead process is gone`,
+  );
+  assert.equal(
+    rows.reduce((s, n) => s + n.rss, 0),
+    after.rss,
+    `${label}: and the rows still weigh the whole tree`,
+  );
+  assert.equal(
+    rows.reduce((s, n) => s + n.pids.length, 0),
+    after.count,
+    `${label}: with every survivor accounted for exactly once`,
+  );
+  // Not losing the memory is the floor; putting it on the RIGHT row is the
+  // point. When the process that exited was one this pane never drew, the rows
+  // must not move at all - its survivors belong to the same terminal they
+  // belonged to a second ago, not to a new top-level row of their own.
+  if (sameRows) {
+    assert.deepEqual(
+      rows.map((n) => n.pid),
+      shownPids,
+      `${label}: a process the pane never drew must not rearrange the pane`,
+    );
+  }
+  // Depth must stay contiguous all the way down, not just for the orphan's own
+  // row: a grandchild left two levels below a parent that moved up one is a
+  // hole by another name.
+  const depth = new Map(after.nodes.map((n) => [n.pid, n.depth]));
+  for (const n of after.nodes) {
+    const parent = depth.get(n.ppid);
+    assert.equal(
+      n.depth,
+      parent === undefined ? 0 : parent + 1,
+      `${label}: pid ${n.pid} sits one level under its surviving parent`,
+    );
+  }
+}
 
 // --- stream framing ----------------------------------------------------
 // The reader sees arbitrary chunks, not blocks: a block can arrive split, and

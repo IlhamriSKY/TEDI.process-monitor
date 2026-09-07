@@ -2,11 +2,19 @@
 
 A task manager scoped to [TEDI](https://tedi.ilhamriski.com/). The status bar
 carries the total memory of everything the app owns, and one click opens the
-whole process tree: the window, the WebView2 renderer, the PTY daemon, every
-terminal shell, everything those shells started, and the extension sidecars.
+short version of where it went: **TEDI itself, and the terminals you opened.**
+
+Nothing is hidden, only summed. The WebView2 children, the extension sidecars,
+each ConPTY's conhost and everything a shell went on to start are added to the
+row that owns them, so a terminal weighs what the shell and its whole subtree
+weigh together and the column still adds up to the entire tree. That is the
+number worth reading: a shell showing 2.0G is telling you the agent inside it
+is holding two gigabytes, which is the question you opened the pane with.
+
 AI CLIs attached to a terminal, [Claude Code](https://claude.com/claude-code),
-[Codex](https://openai.com/codex), Gemini, opencode and the rest, are badged as
-agents so you can see at a glance what is running inside your editor.
+[Codex](https://openai.com/codex), Gemini, opencode and the rest, badge the
+terminal they are running in and name it, so you can see at a glance which of
+five identical `pwsh` rows is the expensive one.
 
 <p align="center">
   <img src="logo.png" alt="Process Monitor" width="128" />
@@ -39,9 +47,10 @@ If a new release exists, click **Update** to reinstall in place.
   bar groups extensions that publish a meter ahead of the icon-only ones, so
   the readouts you scan are not split by the state lights you glance at.
 - A **pane** (click the meter, `Mod+Alt+M`, or the command palette) with a
-  three-minute memory chart over the tree and the tree itself, one row per
-  process, indented by parentage, with per-process CPU and memory and the full
-  command line on hover.
+  three-minute memory chart over the tree, and under it one row for TEDI, one
+  for its PTY daemon, and one for each terminal you opened. A row carries the
+  memory and CPU of everything folded into it, a `+N` saying how many processes
+  that is, and the command line plus that count on hover.
 
 The chart is drawn on the same pixel grid the status bar uses - 4 px cells with
 a 2 px gap, filled in the accent over an empty track, the vocabulary of the
@@ -103,30 +112,32 @@ the window is hidden.
 
 Because that live sampler is one stable process rather than a new one per poll,
 and because on Windows it is a PowerShell (~83 MB of that is PowerShell merely
-existing), it is **shown in the tree, labelled `process monitor`, and counted in
-the total**. Hiding it would understate the very number this pane reports. The
-one-shot sampler is hidden, for the opposite reason: it is a different process
-every time and would blink in and out of its own tree.
+existing), it is **counted in the total** - folded, like every other helper,
+into TEDI's own row. Hiding it would understate the very number this pane
+reports. The one-shot sampler is dropped instead, for the opposite reason: it is
+a different process every time, so counting it would make the total flicker by
+whatever a PowerShell costs on the polls it happens to land on.
 
 ```
-70 processes · 5.7G · CPU 14% · 3 agents            ● live   [Refresh]
-5.7G                                       peak 6.0G · low 5.1G
+67 processes · 5.2G · CPU 2.9% · 3 agents                    [Refresh]
+5.2G                                       peak 5.5G · low 4.9G
 · · · · · · · · · · · · · ■ ■ · · · · · · · · · · · · · · · · ·
 · · · · · · · · · · · ■ ■ ▩ ▩ ■ · · · · · · · · · · · · · · · ·
 · · · · · · ■ ■ ■ ■ ■ ▩ ▩ ▩ ▩ ▩ ■ ■ · · · · · · · · ■ ■ ■ ■ ■ ■
 ■ ■ ■ ■ ■ ■ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ■ ■ ■ ■ ■ ■ ■ ■ ▩ ▩ ▩ ▩ ▩ ▩
 last 3 min
 
-Process                       PID    CPU   Memory
-TEDIApp                     15264    1%       56M
-  WebView2 renderer         13740    3%      245M
-  TEDIApp pty daemon         2504    0%       18M
-    pwsh                    30680    0%       98M
-      claude  AGENT          1140    0%      443M
-        node tsserver       23904    0%      707M
-  pwsh process monitor      25048    6%      126M
-  tedi-discord-helper       23920    0%        5M
+Process                          PID    CPU   Memory
+TEDIApp                +11     22708   1.1%     846M
+  TEDIApp  pty daemon           22804   0.2%      45M
+    pwsh  AGENT  claude  +10     1840   0.5%     1.2G
+    pwsh  AGENT  claude  +16    18528   0.5%     1.2G
+    pwsh  AGENT  claude  +22     2856   0.6%     2.0G
 ```
+
+Five rows for sixty-seven processes, and they still add up to 5.2G. The `+11`
+on the window is its WebView2 children and the extension sidecars; the `+22` on
+the last shell is one Claude Code and the twenty-one processes it started.
 
 ## Permissions
 
@@ -139,13 +150,13 @@ TEDIApp                     15264    1%       56M
 
 ## Platform notes
 
-|                 | Windows                   | macOS                                                                                                                     | Linux                    |
-| --------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| Process table   | CIM                       | `ps`                                                                                                                      | `ps`                     |
-| Live sampler    | `pwsh`, else `powershell` | `/bin/sh`                                                                                                                 | `/bin/sh`                |
-| Total RAM       | `Win32_ComputerSystem`    | `sysctl hw.memsize`                                                                                                       | `/proc/meminfo`          |
-| pid-reuse guard | yes (`CreationDate`)      | not needed                                                                                                                | not needed               |
-| Webview rows    | WebView2 children appear  | **absent**: WKWebView content processes are launchd's children, not the app's, so they cannot honestly be attributed here | WebKitGTK helpers appear |
+|                 | Windows                                | macOS                                                                                                                                                                     | Linux                     |
+| --------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| Process table   | CIM                                    | `ps`                                                                                                                                                                      | `ps`                      |
+| Live sampler    | `pwsh`, else `powershell`              | `/bin/sh`                                                                                                                                                                 | `/bin/sh`                 |
+| Total RAM       | `Win32_ComputerSystem`                 | `sysctl hw.memsize`                                                                                                                                                       | `/proc/meminfo`           |
+| pid-reuse guard | yes (`CreationDate`)                   | not needed                                                                                                                                                                | not needed                |
+| Webview weight  | WebView2 children fold into TEDI's row | **absent**: WKWebView content processes are launchd's children, not the app's, so they cannot honestly be attributed here, and TEDI's row is lighter by exactly that much | WebKitGTK helpers fold in |
 
 The live sampler pins `/bin/sh` rather than the login shell, because the loop
 is POSIX and fish is not.
