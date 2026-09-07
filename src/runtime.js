@@ -34,9 +34,10 @@ export const state = {
   sampling: false,
   /** @type {CpuSample | null} */
   prev: null,
-  /** Previous LIGHT block (pid -> memory + CPU time) and when it was taken, for
-   *  the per-second CPU delta while the stream is running.
-   *  @type {Map<number, { rss: number, cpuUs: number }> | null} */
+  /** Previous LIGHT block (pid -> CPU time) and when it was taken, for the
+   *  per-second CPU delta while the stream is running. No memory: that rides
+   *  the full block, so a row's rss survives untouched between them.
+   *  @type {Map<number, { cpuUs: number }> | null} */
   prevLight: null,
   prevLightAt: 0,
   /**

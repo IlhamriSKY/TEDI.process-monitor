@@ -18,6 +18,8 @@ import {
   collapse,
   cpuSampleOf,
   dropSelf,
+  WIN_LOOP,
+  UNIX_LOOP,
   scriptToken,
   fmtBytes,
 } from "./procs.js";
@@ -274,7 +276,7 @@ const withSelf = JSON.stringify([
   // Unix: `sh -c "a; b"` EXECS its last command, so the `ps` that replaces the
   // shell carries its own argv with no marker in it at all.
   p(5002, 15264, "ps", "ps -e -ww -o pid=,ppid=,rss=,time=,args="),
-  p(5003, 15264, "ps", "ps -e -o pid=,rss=,time="),
+  p(5003, 15264, "ps", "ps -e -o pid=,time="),
 ]);
 setCtx({ os: { platform: "windows" }, invoke: async () => ({ stdout: withSelf, stderr: "" }) });
 const sampled = await sample(true);
@@ -309,33 +311,76 @@ assert.equal(monitor.sub, "process monitor");
 assert.equal(liveSnap.rss, snap.rss + (130 << 20), "and its memory counts toward the total");
 assert.deepEqual(liveSnap.agents, snap.agents, "a sampler is not an agent");
 
+// --- which memory number the sampler asks for --------------------------
+// This is the one assertion that keeps the pane agreeing with Task Manager. A
+// working set counts every shared page once per process that maps it, so
+// summing it over TEDI's seven WebView2 processes over one set of Chromium DLLs
+// came out 2.05x too big (878 MB against a true 428 MB, measured). Private
+// working set is what Task Manager's Memory column shows, and it does not
+// double count. An edit that quietly puts `WorkingSetSize` back would show up
+// as the pane disagreeing with Task Manager by a factor of two, which is
+// exactly the kind of thing nobody notices for a year.
+assert.ok(
+  WIN_LOOP.includes("WorkingSetPrivate"),
+  "the Windows sampler must ask for the PRIVATE working set",
+);
+assert.ok(
+  !WIN_LOOP.includes("WorkingSet64"),
+  "and the light block must not smuggle a working set back in",
+);
+assert.ok(
+  WIN_LOOP.includes("if($null -ne $v){$v}else{$_.WorkingSetSize}"),
+  "with a fallback for a pid that started between the two queries",
+);
+// Anchored on `-o ` because `ppid=,rss=,time=` CONTAINS `pid=,rss=,time=`: the
+// unanchored form passes against the full block's own field list and asserts
+// nothing. Cost me a red run.
+assert.ok(UNIX_LOOP.includes("-o pid=,time="), "the Unix light block drops rss too");
+assert.ok(UNIX_LOOP.includes("-o pid=,ppid=,rss=,time=,args="), "the Unix FULL block still has it");
+// Memory now rides the full block, so the full block runs more often. Moving
+// memory off the light block made it cheap enough to pay for that and still
+// cost less than before: 163 + 3 x 17 ms per 4 s against 174 + 7 x 50 per 8 s.
+assert.ok(WIN_LOOP.includes("($i % 4)"), "a full block every fourth second on Windows");
+assert.ok(UNIX_LOOP.includes("$((i % 4))"), "and on Unix");
+
 // --- light blocks ------------------------------------------------------
-// A light block carries numbers only; it refreshes the tree the last full
-// block built, drops what has exited, and never invents parentage.
+// A light block carries CPU and liveness only; it refreshes the CPU column on
+// the tree the last full block built, drops what has exited, and never invents
+// parentage. Memory is NOT in it, on either platform, because the only cheap
+// memory `Get-Process` and `ps` have is a working set, and a total built from
+// working sets is roughly twice a total built from private working sets.
 const lightWin = parseLight(
   JSON.stringify([
-    { i: 15264, m: 60 << 20, t: 130_000_000 },
-    { i: 2504, m: 15 << 20, t: 0 },
+    { i: 15264, t: 130_000_000 },
+    { i: 2504, t: 0 },
   ]),
   true,
 );
-assert.equal(lightWin.get(15264).rss, 60 << 20);
 assert.equal(lightWin.get(15264).cpuUs, 13_000_000, "100 ns ticks to microseconds");
-const lightUnix = parseLight(" 15264 49152 01:02:03\n  2504 15360 0:00\n", false);
-assert.equal(lightUnix.get(15264).rss, 49152 * 1024);
+const lightUnix = parseLight(" 15264 01:02:03\n  2504 0:00\n", false);
+assert.equal(lightUnix.get(15264).cpuUs, 3723 * 1e6);
 assert.equal(lightUnix.get(2504).cpuUs, 0);
+assert.ok(!("rss" in lightUnix.get(15264)), "a light block carries no memory on either platform");
+assert.ok(!("rss" in lightWin.get(15264)));
 
-const seed = new Map(rows.map((r) => [r.pid, { rss: r.rss, cpuUs: r.cpuUs }]));
+const seed = new Map(rows.map((r) => [r.pid, { cpuUs: r.cpuUs }]));
 // 8016 burns one core for the whole 2 s window; 13740 has exited.
 const nextLight = new Map(seed);
-nextLight.set(8016, { rss: 600 << 20, cpuUs: seed.get(8016).cpuUs + 2_000_000 });
+nextLight.set(8016, { cpuUs: seed.get(8016).cpuUs + 2_000_000 });
 nextLight.delete(13740);
 const folded = applyLight(snap, nextLight, seed, T0 + 2000, 2000, 8);
 assert.equal(folded.count, snap.count - 1, "an exited process leaves the tree");
 assert.ok(!folded.nodes.some((n) => n.pid === 13740));
-assert.equal(folded.nodes.find((n) => n.pid === 8016).rss, 600 << 20, "memory is refreshed");
 assert.equal(folded.nodes.find((n) => n.pid === 8016).cpuPct, 12.5, "one core of eight, over 2 s");
-assert.equal(folded.rss, snap.rss - (229 << 20) + (600 << 20) - (559 << 20));
+// Memory rides the FULL block, so a light block must leave every survivor's
+// number exactly where it found it. Mixing a working set in here from
+// `Get-Process` is what would make the total jump by 2x between two ticks.
+assert.equal(
+  folded.nodes.find((n) => n.pid === 8016).rss,
+  byPid.get(8016).rss,
+  "a light block does not touch memory",
+);
+assert.equal(folded.rss, snap.rss - (229 << 20), "the total only loses what exited");
 assert.deepEqual(folded.agents, snap.agents, "roles survive a light block");
 
 // A light block drops the process that exited but NOT its descendants: those

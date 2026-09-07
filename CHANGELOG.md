@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.3
+
+- **The memory number now agrees with Task Manager, because it is the same
+  number.** It was the working set; it is the **private working set**. A working
+  set includes every shared page, so adding it up across a process tree counts
+  one physical page once for every process that maps it, and TEDI runs seven
+  WebView2 processes over one set of Chromium DLLs. The total was coming out
+  **1.5x to 2x too big**: 4,453 MB against a true 2,931 MB on a 44-process tree,
+  878 MB against 428 MB on a quiet one. Open Task Manager beside the pane now
+  and the totals match; click one TEDI process there and you get the figure this
+  pane folds into its TEDI row.
+- **And it costs less than being wrong did.** Memory moved off the per-second
+  block, which made that block three times cheaper (17 ms against ~50) and paid
+  for both the second CIM query the private working set needs and a full block
+  twice as often. Measured 163 + 3 x 17 ms per 4 s (**5.4% of one core**)
+  against 174 + 7 x 50 ms per 8 s (6.5%). So memory is correct AND refreshed
+  twice as often, for less CPU. CPU still updates every second, because CPU is
+  what actually moves between two ticks.
+- Linux and macOS still report `ps` RSS and still have the shared-page problem.
+  Linux could subtract the shared field of `/proc/<pid>/statm`; macOS has no
+  cheap equivalent. Neither is guessed at from a Windows machine, and the
+  platform table in the README says so.
+
 ## 0.1.2
 
 - **The pane is TEDI and the terminals you opened, and nothing else.** Sixty-

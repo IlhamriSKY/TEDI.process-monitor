@@ -9,10 +9,15 @@
 // which is how an attached Claude Code or Codex shows up, as the reason one
 // terminal weighs two gigabytes. See `collapse` in procs.js.
 //
+// Memory is the PRIVATE working set, the number Task Manager shows. A working
+// set counts every shared page once per process that maps it, so summing it
+// over seven WebView2 processes sharing one set of Chromium DLLs came out up to
+// 2x too big. See WIN_FULL in procs.js.
+//
 // Two sampling modes, because the cost of reading the process table is all in
 // the process you spawn to read it:
 //   - pane open  -> a live sampler (`stream.js`), one block a second from one
-//                   long-lived shell, ~6% of a core;
+//                   long-lived shell, ~5.4% of a core;
 //   - meter only -> a one-shot every 30 s, and nothing at all while the window
 //                   is hidden.
 // The one-shot also stands in whenever the sampler cannot run, so nothing here
@@ -196,7 +201,7 @@ function onBlock(kind, payload) {
     state.prev = cpuSampleOf(rows, at);
     // Seed the light baseline from the full block so the very next light block
     // already has a CPU delta to work from.
-    state.prevLight = new Map(rows.map((r) => [r.pid, { rss: r.rss, cpuUs: r.cpuUs }]));
+    state.prevLight = new Map(rows.map((r) => [r.pid, { cpuUs: r.cpuUs }]));
     state.prevLightAt = at;
   } else {
     if (!state.last) return; // numbers with no tree to put them on
@@ -233,7 +238,7 @@ async function poll() {
     const ncpu = navigator.hardwareConcurrency || 1;
     state.last = buildSnapshot(rows, state.prev, at, ncpu);
     state.prev = cpuSampleOf(rows, at);
-    state.prevLight = new Map(rows.map((r) => [r.pid, { rss: r.rss, cpuUs: r.cpuUs }]));
+    state.prevLight = new Map(rows.map((r) => [r.pid, { cpuUs: r.cpuUs }]));
     state.prevLightAt = at;
     state.error = null;
   } catch (err) {

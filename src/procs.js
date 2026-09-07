@@ -67,13 +67,39 @@ const LIVE_MARKER = "#tedi-pm-live";
  * turned out to be.
  */
 const PS_FULL_FIELDS = "pid=,ppid=,rss=,time=,args=";
-const PS_LIGHT_FIELDS = "pid=,rss=,time=";
+// No `rss=`: memory rides the full block on both platforms, so the two never
+// disagree about which number they are reporting. See WIN_LIGHT.
+const PS_LIGHT_FIELDS = "pid=,time=";
 
-/** Everything the tree needs: parentage, names, command lines, memory, CPU. */
+/**
+ * Everything the tree needs: parentage, names, command lines, memory, CPU.
+ *
+ * Memory is the **private working set**, not the working set, and the
+ * difference is the whole credibility of this pane. A working set includes
+ * every shared page, so summing it over a process tree counts one physical page
+ * once per process that maps it: TEDI runs seven WebView2 processes over one
+ * set of Chromium DLLs, so the total came out 2.05x too big (878 MB against a
+ * true 428 MB, measured). Private working set is also the exact number Task
+ * Manager puts in its Memory column, so the pane and the tool everyone
+ * cross-checks it against now agree to the megabyte instead of by a factor of
+ * two.
+ *
+ * It costs a second CIM query (~85 ms) because Win32_Process does not carry it
+ * and no cheaper source exists: `Get-Counter` on the same counter measured
+ * 1.1 SECONDS, and filtering the perf class down to one tree saves nothing
+ * because it enumerates everything anyway. The two are joined here in the shell
+ * so the payload stays one JSON document and the parser is unchanged. A pid
+ * that appears in Win32_Process but not in the perf class (they are two
+ * queries, a process can start between them) falls back to its working set
+ * rather than reporting zero.
+ */
 const WIN_FULL =
+  "$w=@{};Get-CimInstance Win32_PerfRawData_PerfProc_Process -Property IDProcess,WorkingSetPrivate|" +
+  "ForEach-Object{$w[[int]$_.IDProcess]=$_.WorkingSetPrivate};" +
   "Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine,WorkingSetSize,UserModeTime,KernelModeTime,CreationDate|" +
   "Select-Object @{n='i';e={$_.ProcessId}},@{n='p';e={$_.ParentProcessId}},@{n='n';e={$_.Name}}," +
-  "@{n='m';e={$_.WorkingSetSize}},@{n='t';e={$_.UserModeTime+$_.KernelModeTime}}," +
+  "@{n='m';e={$v=$w[[int]$_.ProcessId];if($null -ne $v){$v}else{$_.WorkingSetSize}}}," +
+  "@{n='t';e={$_.UserModeTime+$_.KernelModeTime}}," +
   "@{n='s';e={[int64]([datetimeoffset]$_.CreationDate).ToUnixTimeMilliseconds()}}," +
   "@{n='c';e={if($_.CommandLine){$_.CommandLine.Substring(0,[Math]::Min(" +
   CMD_CHARS +
@@ -81,15 +107,20 @@ const WIN_FULL =
   "ConvertTo-Json -Compress";
 
 /**
- * Numbers only, for the rows the tree already knows. Deliberately NOT CIM:
- * `Get-Process` reads the same working set and CPU time in ~50 ms against
- * ~350 ms for the CIM projection, because it never opens a process to read its
- * command line. (Its `.Parent` and `.CommandLine` properties are the opposite
- * of cheap - 42 SECONDS for 350 processes - which is why the full sample stays
- * on CIM.)
+ * CPU only, for the rows the tree already knows. Deliberately NOT CIM:
+ * `Get-Process` reads CPU time in ~17 ms against ~160 ms for the full sample,
+ * because it never opens a process to read its command line. (Its `.Parent` and
+ * `.CommandLine` properties are the opposite of cheap - 42 SECONDS for 350
+ * processes - which is why the full sample stays on CIM.)
+ *
+ * It carries **no memory**, and that is the point: the only cheap memory
+ * `Get-Process` has is the working set, and mixing that into a total built from
+ * private working sets would make the number jump by a factor of two between
+ * blocks. Memory therefore refreshes on the full block and CPU every second,
+ * which is the right split anyway - CPU is what moves between two ticks.
  */
 const WIN_LIGHT =
-  "Get-Process|Select-Object @{n='i';e={$_.Id}},@{n='m';e={$_.WorkingSet64}}," +
+  "Get-Process|Select-Object @{n='i';e={$_.Id}}," +
   "@{n='t';e={$_.TotalProcessorTime.Ticks}}|ConvertTo-Json -Compress";
 
 const WIN_PREFIX = `$null='${SELF_MARKER}';$ErrorActionPreference='SilentlyContinue';`;
@@ -106,6 +137,13 @@ const UNIX_PREFIX = `true '${SELF_MARKER}';`;
 // `w` as "no width limit", and spelling it out avoids depending on either one's
 // tolerance for the doubled form. Without it procps clips `args` to 80 columns
 // when stdout is not a terminal, which is exactly our case.
+// ponytail: Unix memory is `ps` RSS, which counts a shared page once per process
+// that maps it, exactly the double count the Windows path now avoids. Linux
+// could subtract the shared field of /proc/<pid>/statm; macOS has no cheap
+// equivalent. Neither is written here because neither can be verified from the
+// Windows machine this was built on, and an unverified per-platform memory
+// formula is worse than a documented one. Upgrade when there is a Linux box to
+// test it on.
 const UNIX_FULL = `ps -e -w -w -o ${PS_FULL_FIELDS}`;
 const UNIX_LIGHT = `ps -e -o ${PS_LIGHT_FIELDS}`;
 const UNIX_SAMPLE = `${UNIX_PREFIX} ${UNIX_FULL}`;
@@ -116,16 +154,31 @@ const UNIX_SAMPLE = `${UNIX_PREFIX} ${UNIX_FULL}`;
  * every second without being a CPU hog: on Windows ANY freshly spawned process
  * costs ~600 ms before it does a thing (PowerShell start-up plus WMI's first
  * connection, and `tasklist` is no cheaper), so a one-shot poll at this cadence
- * would burn a third of a core. Inside a warm shell the same work is ~170 ms
- * full / ~50 ms light, i.e. about 6% of one core at a 1 s cadence.
+ * would burn a third of a core. Inside a warm shell the same work is ~163 ms
+ * full / ~17 ms light.
  *
  * `#F` / `#L` open a block and `#E` closes it, identically on both platforms,
  * so one framing parser serves both and the payload inside each block is
  * exactly what the one-shot sampler already knows how to read.
  */
+
+/**
+ * How often a block is a FULL one, and therefore how often MEMORY refreshes -
+ * the light block carries CPU only.
+ *
+ * It used to be every eighth. Moving memory off the light block made that block
+ * three times cheaper, which bought the budget to run full blocks twice as
+ * often: measured 163 + 3 x 17 = 214 ms per 4 s, i.e. **5.4% of one core**,
+ * against 174 + 7 x 50 = 524 ms per 8 s (6.5%) before. So memory is both
+ * correct now and refreshed twice as often, for less CPU than it cost to be
+ * wrong. CPU stays at one second, because CPU is what actually moves between
+ * two ticks.
+ */
+const FULL_EVERY = 4;
+
 export const WIN_LOOP =
   `$null='${LIVE_MARKER}';$ErrorActionPreference='SilentlyContinue';` +
-  "$i=0;while($true){if(($i % 8) -eq 0){'#F';" +
+  `$i=0;while($true){if(($i % ${FULL_EVERY}) -eq 0){'#F';` +
   WIN_FULL +
   ";'#E'}else{'#L';" +
   WIN_LIGHT +
@@ -133,7 +186,7 @@ export const WIN_LOOP =
 
 export const UNIX_LOOP =
   `true '${LIVE_MARKER}';` +
-  ` i=0; while :; do if [ $((i % 8)) -eq 0 ]; then echo '#F'; ${UNIX_FULL}; else echo '#L'; ${UNIX_LIGHT}; fi; echo '#E'; i=$((i+1)); sleep 1; done`;
+  ` i=0; while :; do if [ $((i % ${FULL_EVERY})) -eq 0 ]; then echo '#F'; ${UNIX_FULL}; else echo '#L'; ${UNIX_LIGHT}; fi; echo '#E'; i=$((i+1)); sleep 1; done`;
 
 /**
  * Read the process table.
@@ -246,31 +299,28 @@ export function parseUnix(stdout) {
 }
 
 /**
- * The light block: memory and CPU time per pid, nothing else. Windows sends
- * `Get-Process` JSON (ticks of 100 ns), Unix a `pid rss time` table.
+ * The light block: CPU time per pid, and nothing else - a pid appearing here at
+ * all is also how the tree learns the process is still alive. Windows sends
+ * `Get-Process` JSON (ticks of 100 ns), Unix a `pid time` table. Memory is
+ * deliberately absent; see WIN_LIGHT.
  * @param {string} text
  * @param {boolean} isWindows
- * @returns {Map<number, { rss: number, cpuUs: number }>}
+ * @returns {Map<number, { cpuUs: number }>}
  */
 export function parseLight(text, isWindows) {
-  /** @type {Map<number, { rss: number, cpuUs: number }>} */
+  /** @type {Map<number, { cpuUs: number }>} */
   const out = new Map();
   if (isWindows) {
     const data = JSON.parse(text);
     for (const r of Array.isArray(data) ? data : [data]) {
       const pid = num(r?.i);
-      if (pid) out.set(pid, { rss: num(r?.m), cpuUs: Math.round(num(r?.t) / 10) });
+      if (pid) out.set(pid, { cpuUs: Math.round(num(r?.t) / 10) });
     }
     return out;
   }
   for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/.exec(line);
-    if (m) {
-      out.set(Number(m[1]), {
-        rss: Number(m[2]) * 1024,
-        cpuUs: Math.round(cpuSeconds(m[3]) * 1e6),
-      });
-    }
+    const m = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+    if (m) out.set(Number(m[1]), { cpuUs: Math.round(cpuSeconds(m[2]) * 1e6) });
   }
   return out;
 }
@@ -287,8 +337,8 @@ export function parseLight(text, isWindows) {
  * the clamp bounds it and the next full block corrects it.
  *
  * @param {Snapshot} snap
- * @param {Map<number, { rss: number, cpuUs: number }>} light
- * @param {Map<number, { rss: number, cpuUs: number }> | null} prev
+ * @param {Map<number, { cpuUs: number }>} light
+ * @param {Map<number, { cpuUs: number }> | null} prev
  * @param {number} at
  * @param {number} dtMs milliseconds since `prev` was taken
  * @param {number} ncpu
@@ -345,7 +395,10 @@ export function applyLight(snap, light, prev, at, dtMs, ncpu) {
       );
       cpuPct = Math.round(cpuPct * 10) / 10;
     }
-    const node = { ...n, ppid, depth, rss: now.rss, cpuPct };
+    // `rss` is carried over untouched: the light block has no memory in it, so
+    // a row keeps the private working set the last full block measured until
+    // the next one lands.
+    const node = { ...n, ppid, depth, cpuPct };
     nodes.push(node);
     rss += node.rss;
     if (cpuPct != null) {
