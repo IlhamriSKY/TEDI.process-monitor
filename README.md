@@ -14,9 +14,9 @@ is holding two gigabytes, which is the question you opened the pane with.
 Which is also why the total is never shown on its own. A tree of four gigabytes
 reads as "TEDI is eating my machine" when TEDI is half a gigabyte of it and the
 rest is the agents, dev servers and databases **you** started inside it, so the
-app's own share sits right beside the total everywhere the total appears: in the
-pane's header, and on the status-bar hover. Measured on the machine this was
-written on: **516M of a 4.1G tree**, 12% of it.
+app's own share is always in view beside it: in the corner of the chart, and as
+its own row on the status-bar hover. Measured on the machine this was written
+on: **516M of a 4.1G tree**, 12% of it.
 
 AI CLIs attached to a terminal, [Claude Code](https://claude.com/claude-code),
 [Codex](https://openai.com/codex), Gemini, opencode and the rest, badge the
@@ -75,6 +75,12 @@ Its vertical axis fits the window rather than starting at zero, and labels its
 own peak and low, because against 32 GB of installed RAM every real change is a
 flat line. A trace that is genuinely steady is held to a 2% band so noise is not
 magnified into a mountain range.
+
+Its four corners are the whole summary: the tree total, its peak and low over
+the window, how long the window is, and **what TEDI itself weighs**. The last
+one is there rather than in the chip strip above it because that strip is a
+fixed-height row that clips on the right, and this number is the one that must
+never be the one to get cut.
 
 ## How it works
 
@@ -161,13 +167,13 @@ a different process every time, so counting it would make the total flicker by
 whatever a PowerShell costs on the polls it happens to land on.
 
 ```
-48 processes · TEDI 461M · 2.9G total · CPU 6.5% · 2 agents   [Refresh]
+48 processes · 2.9G · CPU 6.5% · 2 agents                    [Refresh]
 2.9G                                       peak 3.1G · low 2.6G
 · · · · · · · · · · · · · ■ ■ · · · · · · · · · · · · · · · · ·
 · · · · · · · · · · · ■ ■ ▩ ▩ ■ · · · · · · · · · · · · · · · ·
 · · · · · · ■ ■ ■ ■ ■ ▩ ▩ ▩ ▩ ▩ ■ ■ · · · · · · · · ■ ■ ■ ■ ■ ■
 ■ ■ ■ ■ ■ ■ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ▩ ■ ■ ■ ■ ■ ■ ■ ■ ▩ ▩ ▩ ▩ ▩ ▩
-last 3 min
+last 3 min                                  TEDI itself 461M
 
 Process                          PID    CPU   Memory
 TEDIApp                +11      7768   5.0%     453M
@@ -182,13 +188,14 @@ last shell is one Claude Code and the twenty processes it started. Task Manager,
 open beside it, agrees: 2,931 MB for the tree, and 48.5 MB for the TEDI window
 row on its own.
 
-`TEDI 461M` in the header is that 2.9G minus everything with an owner you can
-point at, and the two chips are always shown together. The tree total is the
-honest headline - it is the memory that is actually gone - but on its own it is
-the number that gets an app uninstalled for someone else's Node process. The
-`461M` and the `2.9G` next to each other say which of the two rows below is
-worth closing, and the hover on a row finishes the sentence: the `+21` shell
-weighs 1.7G and **is** 36M.
+`TEDI itself 461M` in the chart's bottom-right corner is that 2.9G minus
+everything with an owner you can point at. The tree total is the honest headline
+
+- it is the memory that is actually gone - but on its own it is the number that
+  gets an app uninstalled for someone else's Node process. The `461M` and the
+  `2.9G` in the same frame say which of the rows below is worth closing, and the
+  hover on a row finishes the sentence: the `+21` shell weighs 1.7G and **is**
+  36M.
 
 The daemon sits at the left margin here rather than under the window because
 TEDI had been restarted: the daemon outlived the window that spawned it, so its

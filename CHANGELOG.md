@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.5
+
+- **TEDI's own share moved from the chip strip to the chart, because the strip
+  clips on the right.** `.tpm-chips` is a fixed 30 px row that shares its width
+  with the Refresh button and is `white-space: nowrap; overflow: hidden`, so it
+  truncates rather than wraps. 0.1.4's fifth chip pushed the agent count past
+  the edge on any pane under about 450 px, which is a normal width for a split.
+  The number now sits in the chart's fourth corner, bottom-right, opposite
+  `last 3 min`: `TEDI itself 534M`. The chart is full width, that corner was
+  empty, and the overlay now reads as the whole summary - total, peak and low,
+  window length, and what of it is TEDI. The strip is back to its four chips.
+- A source-text check pins it: the chip strip must hold exactly four chips and
+  must not mention `ownRss`, and `tpm-cap is-own` must exist. Neither the clip
+  nor a silent revert is visible to anything but an eye.
+
 ## 0.1.4
 
 - **The total is no longer shown on its own.** It was correct and it was

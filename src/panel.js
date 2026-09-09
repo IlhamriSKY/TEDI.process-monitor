@@ -67,6 +67,11 @@ const CSS = `
 .tpm-cap.is-now { left: 8px; font-size: 13px; font-weight: 600; color: var(--foreground); font-variant-numeric: tabular-nums; line-height: 14px; }
 .tpm-cap.is-range { right: 8px; top: 7px; text-align: right; font-variant-numeric: tabular-nums; }
 .tpm-cap.is-span { top: auto; bottom: 2px; left: 8px; opacity: 0.75; }
+/* The fourth corner. The headline above it is the whole tree, which is mostly
+   what the user started inside TEDI; this is the part that is TEDI. It sits on
+   the chart rather than in the chip strip because the chart is full width and
+   the strip clips. */
+.tpm-cap.is-own { top: auto; bottom: 2px; right: 8px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* --- Table ------------------------------------------------------------- */
 .tpm-head, .tpm-row { display: grid; grid-template-columns: minmax(0, 1fr) 60px 52px 60px; align-items: center; gap: 8px; padding: 0 8px; }
@@ -320,23 +325,18 @@ export function mount(container) {
       );
       return;
     }
-    // TEDI's own share first and the tree total beside it, both labelled. The
-    // total alone is the number that makes people open Task Manager in a panic:
-    // it counts every agent, dev server and database THEY started, and the app
-    // is a small fraction of it. Neither number is worth showing without the
-    // other, so neither is bare.
-    // ponytail: the strip clips rather than wraps (the bar is a fixed 30 px
-    // row), so below ~450 px the agent count loses its tail. It is the right
-    // thing to lose last and the two memory numbers always survive; if panes
-    // that narrow become normal, drop whole chips rather than reflowing.
+    // Four chips and no more. The strip is a fixed 30 px row that CLIPS rather
+    // than wraps, and it shares that row with the Refresh button, so a fifth
+    // chip cost the agent count its tail on any pane under ~450 px. TEDI's own
+    // share went to the chart overlay instead, which is full width and has an
+    // empty corner.
     chips.append(
       el("span", "", `${snap.count} processes`),
-      el("span", "", `TEDI ${fmtBytes(ownRss(snap.nodes))}`),
-      el("span", "", `${fmtBytes(snap.rss)} total`),
+      el("span", "", fmtBytes(snap.rss)),
       el("span", "", snap.cpuPct == null ? "CPU -" : `CPU ${fmtPct(snap.cpuPct)}`),
       el("span", "", snap.agents.length === 1 ? "1 agent" : `${snap.agents.length} agents`),
     );
-    chart.draw(state.history, snap.rss);
+    chart.draw(state.history, snap.rss, ownRss(snap.nodes));
 
     // TEDI and the terminals you opened; everything else is summed into the row
     // that owns it. The signature is still only pid + depth, so a shell that
@@ -413,7 +413,8 @@ function buildChart() {
   const now = el("div", "tpm-cap is-now");
   const range = el("div", "tpm-cap is-range");
   const span = el("div", "tpm-cap is-span", "last 3 min");
-  root.append(svg, now, range, span);
+  const own = el("div", "tpm-cap is-own");
+  root.append(svg, now, range, span, own);
 
   /** Grid geometry, recomputed whenever the pane is resized. */
   let cols = 0;
@@ -422,6 +423,7 @@ function buildChart() {
   /** @type {{ t: number, rss: number }[]} */
   let lastHistory = [];
   let lastCurrent = 0;
+  let lastOwn = 0;
 
   /** One cell as a path subpath. @param {number} x @param {number} y */
   const cell = (x, y) => `M${x} ${y}h${CELL}v${CELL}h-${CELL}z`;
@@ -456,12 +458,15 @@ function buildChart() {
 
   /**
    * @param {{ t: number, rss: number }[]} history
-   * @param {number} current
+   * @param {number} current the whole tree
+   * @param {number} ownBytes the part of it that is TEDI, see `ownRss`
    */
-  const draw = (history, current) => {
+  const draw = (history, current, ownBytes) => {
     lastHistory = history;
     lastCurrent = current;
+    lastOwn = ownBytes;
     now.textContent = fmtBytes(current);
+    own.textContent = ownBytes > 0 ? `TEDI itself ${fmtBytes(ownBytes)}` : "";
     if (cols === 0) measure();
     const series = pixelSeries(history, cols);
     if (series.values.length === 0) {
@@ -491,7 +496,7 @@ function buildChart() {
   // The grid is measured in real pixels, so it has to be rebuilt when the pane
   // is resized - a stretched pixel is not a pixel.
   const ro = new ResizeObserver(() => {
-    if (measure()) draw(lastHistory, lastCurrent);
+    if (measure()) draw(lastHistory, lastCurrent, lastOwn);
   });
   ro.observe(root);
 

@@ -7,6 +7,7 @@
 // recycled pid does not adopt a stranger, that a `node` row says WHICH node,
 // and that the status-bar rows fit the host's fixed-width layout.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { setCtx, state } from "./runtime.js";
 import {
   sample,
@@ -549,6 +550,22 @@ for (const [dead, label, sameRows] of [
   );
   assert.deepEqual(pixelSeries([], 8, now).values, []);
 }
+
+// --- the chip strip has room for four chips, and no more ---------------
+// It is a fixed 30 px row sharing its width with the Refresh button, and it
+// CLIPS rather than wraps, so a fifth chip cost the agent count its tail on any
+// pane under ~450 px. 0.1.4 shipped that and 0.1.5 took it back out. TEDI's own
+// share belongs to the chart overlay, which is full width and had a free
+// corner; this is a source-text check because neither failure is visible to
+// anything but an eye.
+const panelSrc = readFileSync(new URL("./panel.js", import.meta.url), "utf8");
+const chipStrip = panelSrc.slice(panelSrc.indexOf("chips.append("));
+assert.equal(chipStrip.slice(0, chipStrip.indexOf(");")).split("el(").length - 1, 4);
+assert.ok(
+  !chipStrip.slice(0, chipStrip.indexOf(");")).includes("ownRss"),
+  "TEDI's own share must not go back into the chip strip",
+);
+assert.ok(panelSrc.includes("tpm-cap is-own"), "it lives on the chart overlay instead");
 
 // --- status-bar detail fits the host's fixed layout --------------------
 // `label` is a 56 px column (~8 characters before it wraps) and `note` never
