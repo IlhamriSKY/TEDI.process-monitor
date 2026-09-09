@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.6
+
+- **The status-bar hover's chart was reading as cut off on the right, and the
+  cause was the `TEDI` row 0.1.4 put under it.** The popover is `w-fit`, so it
+  is as wide as its widest child. The chart grid is 40 columns at the host's
+  6 px pitch, 238 px. That row - label, bar, value, and the note
+  `app, UI and pty daemon` - came to about 295 px, so the box stretched ~57 px
+  past the grid, and the chart's caption, which is one `justify-between` row,
+  right-aligned to the BOX instead of to the last column. The grid stopped short
+  of `peak 3.5G · low 3.4G` and looked truncated.
+- **So the number moved into the caption, where it was always the right shape.**
+  The hover now reads `last 3 min` on the left and `TEDI itself 542M` on the
+  right, exactly the pair the pane prints under its own grid, and the popover is
+  back to grid width with the caption flush to the last column. Peak and low
+  stay in the pane, which has four corners for them; the status bar has two
+  slots and this is the number worth one.
+- That row's bar was dead anyway: **555M against 32 GB of RAM is 1.7%, which
+  rounds to zero lit cells out of ten**, so it drew a full-width empty track
+  next to a real CPU bar and a real memory bar.
+- Checked with a new offline recipe: the host's `TooltipBody` and `PixelChart`
+  markup rebuilt in plain CSS from the real `render()` output, with a rule drawn
+  at the grid's computed right edge. A test now budgets the caption at 40
+  characters for both spans together, which is what 238 px holds at 10 px.
+
 ## 0.1.5
 
 - **TEDI's own share moved from the chip strip to the chart, because the strip

@@ -14,9 +14,9 @@ is holding two gigabytes, which is the question you opened the pane with.
 Which is also why the total is never shown on its own. A tree of four gigabytes
 reads as "TEDI is eating my machine" when TEDI is half a gigabyte of it and the
 rest is the agents, dev servers and databases **you** started inside it, so the
-app's own share is always in view beside it: in the corner of the chart, and as
-its own row on the status-bar hover. Measured on the machine this was written
-on: **516M of a 4.1G tree**, 12% of it.
+app's own share is captioned under the memory trend in both places that trend is
+drawn, the pane's chart and the status-bar hover. Measured on the machine this
+was written on: **516M of a 4.1G tree**, 12% of it.
 
 AI CLIs attached to a terminal, [Claude Code](https://claude.com/claude-code),
 [Codex](https://openai.com/codex), Gemini, opencode and the rest, badge the
@@ -49,12 +49,12 @@ If a new release exists, click **Update** to reinstall in place.
 
 - A **status-bar meter**: total memory of every process TEDI owns, drawn as a
   share of the machine's RAM. Hovering adds the same pixel trend the pane draws,
-  CPU, and two memory rows - the tree, and **what TEDI itself costs** (the
-  window, the WebView2 processes it renders in, and the PTY daemon). Nothing
-  else: the per-process list is what the click is for. It sits immediately
-  right of the AI usage meters: the
-  bar groups extensions that publish a meter ahead of the icon-only ones, so
-  the readouts you scan are not split by the state lights you glance at.
+  captioned with **what TEDI itself costs** (the window, the WebView2 processes
+  it renders in, and the PTY daemon), then CPU and memory. Nothing else: the
+  per-process list is what the click is for. It sits immediately right of the AI
+  usage meters, because the bar groups extensions that publish a meter ahead of
+  the icon-only ones, so the readouts you scan are not split by the state lights
+  you glance at.
 - A **pane** (click the meter, `Mod+Alt+M`, or the command palette) with a
   three-minute memory chart over the tree, and under it one row for TEDI, one
   for its PTY daemon, and one for each terminal you opened. A row carries the

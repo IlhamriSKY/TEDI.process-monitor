@@ -80,21 +80,23 @@ export function render(snap, totalMem) {
     value: fmtBytes(snap.rss),
     note: totalMem > 0 ? `of ${fmtBytes(totalMem)}` : "",
   });
-  // The headline is the whole tree, and the whole tree is mostly other people's
-  // work: the agents, dev servers and databases started from inside TEDI. This
-  // row says what the app itself costs, so the meter turning orange sends you
-  // to the thing that grew instead of to the uninstaller.
-  const own = ownRss(snap.nodes);
-  rows.push({
-    label: "TEDI",
-    progress: totalMem > 0 ? own / totalMem : undefined,
-    value: fmtBytes(own),
-    note: "app, UI and pty daemon",
-  });
   rows.push({ label: "", note: "Click to open the tree" });
 
   // The same pixel grid the pane draws, from the same series maths, so the
-  // hover and the pane cannot disagree about what the trend looks like.
+  // hover and the pane cannot disagree about what the trend looks like - and
+  // captioned with the same pair the pane puts under its own grid: how long the
+  // window is, and how much of that total is TEDI rather than what you started
+  // inside it. The headline above is the whole tree, which is the memory that is
+  // actually gone; this is the half of the sentence that stops it reading as
+  // "TEDI is eating my machine".
+  //
+  // It replaces peak/low here (the pane still carries those, in a corner the
+  // status bar has no room for). The caption is ONE flex row of two shrink-0
+  // spans, so whatever it holds has to fit the grid's own 238 px or it pushes
+  // the popover wider than the chart - which is exactly what a "TEDI" ROW with
+  // a note did in 0.1.4: it stretched the box 57 px past the grid, the caption
+  // right-aligned to the box instead of to the last column, and the chart read
+  // as cut off. A row was the wrong shape for one number.
   const series = pixelSeries(state.history, TIP_COLS);
   const chart =
     series.values.length > 0
@@ -103,7 +105,7 @@ export function render(snap, totalMem) {
           tone,
           rows: 6,
           label: "last 3 min",
-          note: `peak ${fmtBytes(series.hi)} · low ${fmtBytes(series.lo)}`,
+          note: `TEDI itself ${fmtBytes(ownRss(snap.nodes))}`,
         }
       : undefined;
 

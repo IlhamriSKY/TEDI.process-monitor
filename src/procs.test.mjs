@@ -589,17 +589,29 @@ for (const r of item.detail.rows) {
 // Hover answers "how heavy is this"; the per-process list belongs to the pane.
 assert.deepEqual(
   item.detail.rows.map((r) => r.label),
-  ["CPU", "Memory", "TEDI", ""],
-  "hover carries CPU, the tree total, and what the app itself costs",
+  ["CPU", "Memory", ""],
+  "hover carries CPU and memory only",
 );
-// The headline stays the whole tree - the meter exists to show the gigabytes -
-// but it must never be the ONLY number on the hover, or it reads as TEDI's own.
-assert.equal(item.detail.rows[2].value, fmtBytes(ownRss(snap.nodes)));
+// TEDI's own share is a CAPTION, not a row. As a row its note was the widest
+// thing in the popover, which stretched the content box ~57 px past the chart
+// grid: the caption then right-aligned to the box rather than to the last
+// column and the chart read as cut off. Its bar was dead too - 555M of 32G
+// rounds to zero lit cells out of ten.
 assert.ok(
-  item.detail.rows[2].progress < item.detail.rows[1].progress,
-  "and the app's own bar is shorter than the tree's",
+  !item.detail.rows.some((r) => (r.value ?? "").includes(fmtBytes(ownRss(snap.nodes)))),
+  "the app's own share must not go back into the rows",
 );
 assert.ok(item.detail.chart, "and the same pixel trend the pane draws");
+assert.equal(item.detail.chart.note, `TEDI itself ${fmtBytes(ownRss(snap.nodes))}`);
+// The caption is one flex row of two shrink-0 spans over the grid's own width:
+// TIP_COLS columns at the host's 6 px pitch, less the trailing gap, is 238 px,
+// and the gap between the two spans is 12 px. At 10 px the widest system font
+// averages under 5.4 px a character, so 40 characters is the budget that keeps
+// the caption inside the chart it belongs to.
+assert.ok(
+  item.detail.chart.label.length + item.detail.chart.note.length <= 40,
+  `chart caption is wider than its grid: ${item.detail.chart.label} / ${item.detail.chart.note}`,
+);
 assert.equal(item.detail.chart.values.length, TIP_COLS);
 assert.ok(
   item.detail.chart.values.every((v) => v >= 0 && v <= 1),
