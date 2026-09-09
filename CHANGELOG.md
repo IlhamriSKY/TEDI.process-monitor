@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.4
+
+- **The total is no longer shown on its own.** It was correct and it was
+  alarming: 4.1G in the status bar, and the reasonable reading of that is "TEDI
+  is eating my machine". On the machine this was written on, TEDI was **516M of
+  it, 12%** - one 37M window, seven WebView2 processes at 471M, an 8M PTY
+  daemon. The other 3.6G was three Claude sessions, fifteen MCP servers, four
+  node dev servers and a MySQL, all of them started by the user, inside TEDI,
+  and none of them a cost of running TEDI. So the app's own share now sits next
+  to the total everywhere the total appears: a `TEDI 516M` chip beside
+  `4.1G total` in the pane header, and a `TEDI` row under `Memory` on the
+  status-bar hover. The headline stays the whole tree, because the whole tree is
+  the memory that is actually gone.
+- **A row's hover says what the process it names weighs alone.** The Memory
+  column is a subtree total, on purpose, and a `pwsh` reading 1.9G is the most
+  alarming thing this pane can draw when the shell itself is 36M. The tooltip
+  now reads "This process is 36M. The 18 processes it started make up the rest
+  of its memory and CPU." Every folded row gets it, not just TEDI's: the gap
+  between the two numbers is where the memory actually is, and it is the first
+  thing worth knowing.
+
 ## 0.1.3
 
 - **The memory number now agrees with Task Manager, because it is the same

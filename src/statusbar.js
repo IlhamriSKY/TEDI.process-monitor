@@ -12,7 +12,7 @@
 // the popover at roughly 46 characters.
 
 import { ctx, state } from "./runtime.js";
-import { fmtBytes, fmtPct } from "./procs.js";
+import { fmtBytes, fmtPct, ownRss } from "./procs.js";
 import { pixelSeries, TIP_COLS } from "./chart.js";
 
 const ITEM_ID = "procs";
@@ -80,6 +80,17 @@ export function render(snap, totalMem) {
     value: fmtBytes(snap.rss),
     note: totalMem > 0 ? `of ${fmtBytes(totalMem)}` : "",
   });
+  // The headline is the whole tree, and the whole tree is mostly other people's
+  // work: the agents, dev servers and databases started from inside TEDI. This
+  // row says what the app itself costs, so the meter turning orange sends you
+  // to the thing that grew instead of to the uninstaller.
+  const own = ownRss(snap.nodes);
+  rows.push({
+    label: "TEDI",
+    progress: totalMem > 0 ? own / totalMem : undefined,
+    value: fmtBytes(own),
+    note: "app, UI and pty daemon",
+  });
   rows.push({ label: "", note: "Click to open the tree" });
 
   // The same pixel grid the pane draws, from the same series maths, so the
@@ -119,6 +130,7 @@ function plainTooltip(snap, totalMem) {
   const lines = [
     "TEDI processes",
     `Memory ${fmtBytes(snap.rss)}${totalMem > 0 ? ` of ${fmtBytes(totalMem)}` : ""}`,
+    `TEDI itself ${fmtBytes(ownRss(snap.nodes))}`,
   ];
   if (snap.cpuPct != null) lines.push(`CPU ${fmtPct(snap.cpuPct)}`);
   lines.push("Click to open the tree");

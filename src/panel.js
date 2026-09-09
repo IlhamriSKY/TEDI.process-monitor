@@ -20,7 +20,7 @@
 // second, which makes the pane unreadable exactly when it is most alive.
 
 import { ctx, state } from "./runtime.js";
-import { collapse, fmtBytes, fmtPct } from "./procs.js";
+import { collapse, fmtBytes, fmtPct, ownRss } from "./procs.js";
 import { pixelSeries } from "./chart.js";
 
 const STYLE_ID = "tpm-styles";
@@ -320,9 +320,19 @@ export function mount(container) {
       );
       return;
     }
+    // TEDI's own share first and the tree total beside it, both labelled. The
+    // total alone is the number that makes people open Task Manager in a panic:
+    // it counts every agent, dev server and database THEY started, and the app
+    // is a small fraction of it. Neither number is worth showing without the
+    // other, so neither is bare.
+    // ponytail: the strip clips rather than wraps (the bar is a fixed 30 px
+    // row), so below ~450 px the agent count loses its tail. It is the right
+    // thing to lose last and the two memory numbers always survive; if panes
+    // that narrow become normal, drop whole chips rather than reflowing.
     chips.append(
       el("span", "", `${snap.count} processes`),
-      el("span", "", fmtBytes(snap.rss)),
+      el("span", "", `TEDI ${fmtBytes(ownRss(snap.nodes))}`),
+      el("span", "", `${fmtBytes(snap.rss)} total`),
       el("span", "", snap.cpuPct == null ? "CPU -" : `CPU ${fmtPct(snap.cpuPct)}`),
       el("span", "", snap.agents.length === 1 ? "1 agent" : `${snap.agents.length} agents`),
     );
@@ -537,9 +547,12 @@ function updateRow(row, n) {
   // works for rows this render did not create - and rewritten here, because a
   // row survives changes to everything in it.
   const title = `${n.label}${n.sub ? ` · ${n.sub}` : ""}  ·  pid ${n.pid}`;
+  // Naming the process's OWN weight is the whole point of the line: the number
+  // in the Memory column is a subtree, and the gap between the two is where a
+  // gigabyte actually is. A row that folded nothing has no gap to explain.
   const more =
     n.rolled > 0
-      ? `Includes ${n.rolled} more ${n.rolled === 1 ? "process" : "processes"} started by this one, counted in its memory and CPU.`
+      ? `This process is ${fmtBytes(n.self)}. The ${n.rolled} ${n.rolled === 1 ? "process" : "processes"} it started make up the rest of its memory and CPU.`
       : "";
   const moved = row.root.dataset.tipTitle !== title || row.root.dataset.tipMore !== more;
   row.root.dataset.tipTitle = title;

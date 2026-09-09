@@ -11,6 +11,13 @@ weigh together and the column still adds up to the entire tree. That is the
 number worth reading: a shell showing 2.0G is telling you the agent inside it
 is holding two gigabytes, which is the question you opened the pane with.
 
+Which is also why the total is never shown on its own. A tree of four gigabytes
+reads as "TEDI is eating my machine" when TEDI is half a gigabyte of it and the
+rest is the agents, dev servers and databases **you** started inside it, so the
+app's own share sits right beside the total everywhere the total appears: in the
+pane's header, and on the status-bar hover. Measured on the machine this was
+written on: **516M of a 4.1G tree**, 12% of it.
+
 AI CLIs attached to a terminal, [Claude Code](https://claude.com/claude-code),
 [Codex](https://openai.com/codex), Gemini, opencode and the rest, badge the
 terminal they are running in and name it, so you can see at a glance which of
@@ -41,16 +48,20 @@ If a new release exists, click **Update** to reinstall in place.
 ## What you get
 
 - A **status-bar meter**: total memory of every process TEDI owns, drawn as a
-  share of the machine's RAM. Hovering adds the same pixel trend the pane draws
-  plus CPU and memory, and nothing else - the per-process list is what the click
-  is for. It sits immediately right of the AI usage meters: the
+  share of the machine's RAM. Hovering adds the same pixel trend the pane draws,
+  CPU, and two memory rows - the tree, and **what TEDI itself costs** (the
+  window, the WebView2 processes it renders in, and the PTY daemon). Nothing
+  else: the per-process list is what the click is for. It sits immediately
+  right of the AI usage meters: the
   bar groups extensions that publish a meter ahead of the icon-only ones, so
   the readouts you scan are not split by the state lights you glance at.
 - A **pane** (click the meter, `Mod+Alt+M`, or the command palette) with a
   three-minute memory chart over the tree, and under it one row for TEDI, one
   for its PTY daemon, and one for each terminal you opened. A row carries the
   memory and CPU of everything folded into it, a `+N` saying how many processes
-  that is, and the command line plus that count on hover.
+  that is, and on hover the command line plus **what the named process weighs on
+  its own** - a shell reading 1.9G is a 36M shell holding an agent, and the
+  hover says so rather than leaving you to assume PowerShell went mad.
 
 The chart is drawn on the same pixel grid the status bar uses - 4 px cells with
 a 2 px gap, filled in the accent over an empty track, the vocabulary of the
@@ -150,7 +161,7 @@ a different process every time, so counting it would make the total flicker by
 whatever a PowerShell costs on the polls it happens to land on.
 
 ```
-48 processes · 2.9G · CPU 6.5% · 2 agents                    [Refresh]
+48 processes · TEDI 461M · 2.9G total · CPU 6.5% · 2 agents   [Refresh]
 2.9G                                       peak 3.1G · low 2.6G
 · · · · · · · · · · · · · ■ ■ · · · · · · · · · · · · · · · · ·
 · · · · · · · · · · · ■ ■ ▩ ▩ ■ · · · · · · · · · · · · · · · ·
@@ -170,6 +181,14 @@ the window is its WebView2 children and the extension sidecars; the `+21` on the
 last shell is one Claude Code and the twenty processes it started. Task Manager,
 open beside it, agrees: 2,931 MB for the tree, and 48.5 MB for the TEDI window
 row on its own.
+
+`TEDI 461M` in the header is that 2.9G minus everything with an owner you can
+point at, and the two chips are always shown together. The tree total is the
+honest headline - it is the memory that is actually gone - but on its own it is
+the number that gets an app uninstalled for someone else's Node process. The
+`461M` and the `2.9G` next to each other say which of the two rows below is
+worth closing, and the hover on a row finishes the sentence: the `+21` shell
+weighs 1.7G and **is** 36M.
 
 The daemon sits at the left margin here rather than under the window because
 TEDI had been restarted: the daemon outlived the window that spawned it, so its

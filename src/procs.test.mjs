@@ -22,6 +22,7 @@ import {
   UNIX_LOOP,
   scriptToken,
   fmtBytes,
+  ownRss,
 } from "./procs.js";
 import { takeBlocks, latest } from "./stream.js";
 import { pixelSeries, CHART_MS, TIP_COLS } from "./chart.js";
@@ -235,6 +236,32 @@ assert.equal(
   "folding twice must not double anything",
 );
 
+// --- what the row itself weighs ----------------------------------------
+// The Memory column is a SUBTREE, and a shell that reads 1.5G while the process
+// it names holds 35M is the thing that sends people to Task Manager. `self` is
+// frozen before the fold so the hover can name both.
+assert.equal(shownBy.get(26788).self, byPid.get(26788).rss, "a row remembers its own weight");
+assert.ok(shownBy.get(26788).self < shownBy.get(26788).rss, "which is not what the column shows");
+assert.equal(shownBy.get(9101).self, shownBy.get(9101).rss, "a row that folded nothing has no gap");
+assert.equal(shownBy.get(15264).self, byPid.get(15264).rss, "and so does the window");
+
+// --- TEDI's own share --------------------------------------------------
+// The window, the WebView2 processes it renders itself in, and the PTY daemon.
+// Everything else in this tree has an owner you can point at.
+const own = ownRss(snap.nodes);
+assert.equal(
+  own,
+  snap.nodes
+    .filter((n) => ["app", "daemon", "webview"].includes(n.role))
+    .reduce((s, n) => s + n.rss, 0),
+);
+assert.ok(own < snap.rss, "and it is a fraction of the tree, which is the whole point");
+assert.ok(
+  !snap.nodes.some((n) => n.role === "agent" && ["app", "daemon", "webview"].includes(n.role)),
+  "an agent is never counted as TEDI",
+);
+assert.equal(ownRss([]), 0, "and an empty tree is zero, not NaN");
+
 // CPU rolls up the same way, summed then rounded once.
 const busyShown = collapse(later.nodes).find((n) => n.pid === 26788);
 assert.equal(busyShown.cpuPct, 12.5, "the shell reports the CPU its agent is burning");
@@ -401,10 +428,7 @@ for (const [dead, label, sameRows] of [
   gone.delete(dead);
   const after = applyLight(snap, gone, seed, T0 + 2000, 2000, 8);
   const rows = collapse(after.nodes);
-  assert.ok(
-    !after.nodes.some((n) => n.pid === dead),
-    `${label}: the dead process is gone`,
-  );
+  assert.ok(!after.nodes.some((n) => n.pid === dead), `${label}: the dead process is gone`);
   assert.equal(
     rows.reduce((s, n) => s + n.rss, 0),
     after.rss,
@@ -548,8 +572,15 @@ for (const r of item.detail.rows) {
 // Hover answers "how heavy is this"; the per-process list belongs to the pane.
 assert.deepEqual(
   item.detail.rows.map((r) => r.label),
-  ["CPU", "Memory", ""],
-  "hover carries CPU and memory only",
+  ["CPU", "Memory", "TEDI", ""],
+  "hover carries CPU, the tree total, and what the app itself costs",
+);
+// The headline stays the whole tree - the meter exists to show the gigabytes -
+// but it must never be the ONLY number on the hover, or it reads as TEDI's own.
+assert.equal(item.detail.rows[2].value, fmtBytes(ownRss(snap.nodes)));
+assert.ok(
+  item.detail.rows[2].progress < item.detail.rows[1].progress,
+  "and the app's own bar is shorter than the tree's",
 );
 assert.ok(item.detail.chart, "and the same pixel trend the pane draws");
 assert.equal(item.detail.chart.values.length, TIP_COLS);

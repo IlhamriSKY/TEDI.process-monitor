@@ -24,8 +24,9 @@ import { ctx } from "./runtime.js";
 /** @typedef {RawProc & { depth: number, role: Role, label: string, sub: string, cpuPct: number | null }} ProcNode */
 
 /** A row as the pane draws it: one kept process carrying the memory, the CPU
- *  and the pids of everything folded into it. See `collapse`. */
-/** @typedef {ProcNode & { pids: number[], rolled: number, inside: string[] }} CollapsedNode */
+ *  and the pids of everything folded into it. `self` is what the kept process
+ *  weighs ALONE, before anything was folded in. See `collapse`. */
+/** @typedef {ProcNode & { pids: number[], rolled: number, inside: string[], self: number }} CollapsedNode */
 
 /** @typedef {{ at: number, nodes: ProcNode[], count: number, rss: number, cpuPct: number | null, agents: string[] }} Snapshot */
 
@@ -633,6 +634,10 @@ export function collapse(nodes) {
         pids: [n.pid],
         rolled: 0,
         inside: /** @type {string[]} */ ([]),
+        // Frozen before the folding starts. `rss` is about to become a subtree
+        // total, and a row that reads 1.5G while the process it names weighs
+        // 35M is the single most alarming thing this pane can draw.
+        self: n.rss,
       };
       out.push(row);
       host.set(n.pid, row);
@@ -664,6 +669,30 @@ export function collapse(nodes) {
     row.sub = row.inside.join(", ") || (big ? big.sub || big.label : "");
   }
   return out;
+}
+
+/** The roles that ARE the application: the window, the UI processes it renders
+ *  itself in, and the PTY daemon. Everything else in this tree has an owner you
+ *  can point at - a terminal you opened, an agent inside one, a service an
+ *  extension started - and is not a cost of running TEDI. */
+const OWN_ROLES = new Set(["app", "daemon", "webview"]);
+
+/**
+ * What TEDI itself weighs, as opposed to what is running inside it.
+ *
+ * The headline number here is a whole-tree total, on purpose: a pane that
+ * reported only the window would be hiding the gigabytes and would be useless.
+ * But a total of four gigabytes reads as "TEDI is eating my machine" when TEDI
+ * is a few hundred megabytes of it, so the two numbers are shown side by side
+ * and the difference is the answer.
+ *
+ * @param {ProcNode[]} nodes
+ * @returns {number} bytes
+ */
+export function ownRss(nodes) {
+  let rss = 0;
+  for (const n of nodes) if (OWN_ROLES.has(n.role)) rss += n.rss;
+  return rss;
 }
 
 /**
