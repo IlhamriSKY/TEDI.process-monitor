@@ -19,6 +19,7 @@ import {
   collapse,
   cpuSampleOf,
   dropSelf,
+  readTotalMemory,
   WIN_LOOP,
   UNIX_LOOP,
   scriptToken,
@@ -306,6 +307,9 @@ const withSelf = JSON.stringify([
   p(5002, 15264, "ps", "ps -e -ww -o pid=,ppid=,rss=,time=,args="),
   p(5003, 15264, "ps", "ps -e -o pid=,time="),
 ]);
+// The shell path is what a host without `process_sample` falls back to, and
+// this mock answers every invoke with shell output, so the native probe fails
+// and latches - which is the fallback itself, exercised.
 setCtx({ os: { platform: "windows" }, invoke: async () => ({ stdout: withSelf, stderr: "" }) });
 const sampled = await sample(true);
 const selfless = buildSnapshot(sampled, null, T0, 8);
@@ -624,3 +628,65 @@ state.history = [];
 setCtx(null);
 
 console.log(`process tree: ok (${snap.count} nodes, ${fmtBytes(snap.rss)})`);
+
+// --- the native process table is preferred, and latches ------------------
+// One IPC call instead of a PowerShell: rows arrive normalised, the machine's
+// RAM rides along so `readTotalMemory` never spawns anything either, and once
+// the command has answered a later failure must be REPORTED rather than
+// silently starting the shell sampler the native path exists to avoid.
+{
+  state.native = null;
+  state.totalMem = 0;
+  /** @type {string[]} */
+  const calls = [];
+  setCtx({
+    os: { platform: "windows" },
+    invoke: async (/** @type {string} */ name) => {
+      calls.push(name);
+      return {
+        totalMem: 34_359_738_368,
+        procs: [
+          {
+            pid: 15264,
+            ppid: 1,
+            name: "TEDIApp.exe",
+            cmd: "TEDIApp.exe",
+            rss: 1 << 20,
+            cpuUs: 5,
+            startMs: T0,
+          },
+        ],
+      };
+    },
+  });
+  const rows = await sample(true);
+  assert.deepEqual(calls, ["process_sample"], "the native table is asked for first");
+  assert.equal(state.native, true, "and latches once it answers");
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0], {
+    pid: 15264,
+    ppid: 1,
+    name: "TEDIApp.exe",
+    cmd: "TEDIApp.exe",
+    rss: 1 << 20,
+    cpuUs: 5,
+    startMs: T0,
+  });
+  assert.equal(state.totalMem, 34_359_738_368, "the RAM figure rides the sample");
+  assert.equal(await readTotalMemory(true), 34_359_738_368, "so no shell is spawned for it");
+  assert.deepEqual(calls, ["process_sample"], "readTotalMemory spawned nothing");
+
+  // Proven to work, then broken: this must surface, not fall back to a shell.
+  setCtx({
+    os: { platform: "windows" },
+    invoke: async (/** @type {string} */ name) => {
+      calls.push(name);
+      throw new Error("host said no");
+    },
+  });
+  await assert.rejects(() => sample(true), /host said no/);
+  assert.deepEqual(calls, ["process_sample", "process_sample"], "no shell sampler was reached");
+  state.native = null;
+  state.totalMem = 0;
+  setCtx(null);
+}

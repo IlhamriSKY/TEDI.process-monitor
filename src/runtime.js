@@ -55,6 +55,20 @@ export const state = {
   /** Latched once the stream has failed, so we stop trying to start one and
    *  keep the one-shot poll instead. */
   streamDead: false,
+  /**
+   * Does this TEDI read the process table itself?
+   *
+   * `null` until the first sample answers, then `true` (the host has
+   * `process_sample`, so nothing is ever spawned) or `false` (an older TEDI,
+   * fall back to the shell sampler). It is latched on the FIRST call only: once
+   * the command has answered once, a later failure is a real failure and is
+   * reported rather than silently starting a PowerShell.
+   * @type {boolean | null}
+   */
+  native: null,
+  /** Physical RAM in bytes, when the native sample carried it. Saves the
+   *  separate shell call `readTotalMemory` would otherwise make. */
+  totalMem: 0,
   /** Last good snapshot, so a newly opened pane paints immediately instead of
    *  waiting out the poll. @type {Snapshot | null} */
   last: null,

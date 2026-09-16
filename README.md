@@ -84,8 +84,16 @@ never be the one to get cut.
 
 ## How it works
 
-One shell call reads the OS process table, the same table Task Manager and `ps`
-read:
+TEDI reads the OS process table itself and hands it over: one `process_sample`
+call, no process spawned, about 10 ms for 300 rows. Memory is the private
+working set on Windows (`GetProcessMemoryInfo` with the EX2 counters, the same
+number Task Manager shows) and RSS on macOS and Linux; the host's `sysinfo`
+covers all three platforms, and the rows arrive already normalised, so there is
+nothing left to parse.
+
+That command landed in TEDI 0.4.61. On anything older this extension falls back
+to what it used to do exclusively - reading the same table through a shell -
+and everything below describes that fallback:
 
 | Platform          | Source                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -143,6 +151,12 @@ produces a single row** - PowerShell start-up plus WMI's first connection - and
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
 | A pane is open and visible          | One long-lived shell prints a framed block every second: a CPU-only block, and the full table every fourth | **~5.4% of one core**, and the shell's own ~130 MB |
 | Meter only, or the window is hidden | One-shot every 30 s, or not at all                                                                         | ~0.6-1.1 s of a core per sample                    |
+
+Head to head on one machine with 311 processes, both sampling once a second:
+the shell loop costs **122 MB and 17.8% of one core**, the host's own reader
+**1.4% of one core and no process at all**. That is the whole reason the native
+path exists, and why the pane can now be as fresh with a pane open as the
+status bar used to be with none.
 
 The split is CPU every second, memory every fourth. That is not a compromise, it
 is what made the correct memory number affordable: taking memory OUT of the

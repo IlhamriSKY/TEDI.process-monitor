@@ -2,10 +2,13 @@
 // everything after that is pure functions, which is what `procs.test.mjs`
 // exercises.
 //
-// Why a shell call and not a Tauri command: TEDI ships no process-table API and
-// adding one would mean a core release for an extension, so this reads the same
-// table Task Manager and `ps` read. Windows goes through CIM (`tasklist` has no
-// parent pid, and `wmic` is gone from Windows 11 24H2); Unix through `ps`.
+// TEDI 0.4.61 reads the process table itself (`process_sample`, backed by the
+// host's Rust), which is what this asks for first: one IPC call, ~10 ms, and
+// NOTHING is spawned. Every shell path below is the fallback for an older host
+// and is what this extension used to do exclusively - Windows through CIM
+// (`tasklist` has no parent pid, and `wmic` is gone from Windows 11 24H2), Unix
+// through `ps`. That fallback costs a resident PowerShell (~120 MB) while a pane
+// is open, which is the whole reason the native path exists.
 //
 // The tree is rooted at every live process whose image is TEDI's own binary,
 // which is both the window AND the PTY daemon (the daemon is the same
@@ -14,7 +17,7 @@
 // pid that no longer exists and walking down from the window alone would miss
 // every terminal in the app.
 
-import { ctx } from "./runtime.js";
+import { ctx, state } from "./runtime.js";
 
 /** One row of the OS process table, normalised across platforms. */
 /** @typedef {{ pid: number, ppid: number, name: string, cmd: string, rss: number, cpuUs: number, startMs: number }} RawProc */
@@ -190,11 +193,53 @@ export const UNIX_LOOP =
   ` i=0; while :; do if [ $((i % ${FULL_EVERY})) -eq 0 ]; then echo '#F'; ${UNIX_FULL}; else echo '#L'; ${UNIX_LIGHT}; fi; echo '#E'; i=$((i+1)); sleep 1; done`;
 
 /**
- * Read the process table.
+ * The host's own process table: one command, no process spawned, ~10 ms for
+ * ~300 rows. Rows arrive already normalised (bytes, CPU microseconds, epoch
+ * milliseconds), so there is nothing to parse - only to coerce, in case a
+ * future host widens a field.
+ * @returns {Promise<RawProc[]>}
+ */
+async function sampleNative() {
+  const out = await ctx?.invoke("process_sample");
+  const list = out?.procs;
+  if (!Array.isArray(list)) throw new Error("process_sample returned no rows");
+  const total = num(out?.totalMem);
+  if (total > 0) state.totalMem = total;
+  return list.map((r) => ({
+    pid: num(r?.pid),
+    ppid: num(r?.ppid),
+    name: String(r?.name ?? ""),
+    cmd: String(r?.cmd ?? ""),
+    rss: num(r?.rss),
+    cpuUs: num(r?.cpuUs),
+    startMs: num(r?.startMs),
+  }));
+}
+
+/**
+ * Read the process table: from the host when it can, from a shell when it
+ * cannot.
  * @param {boolean} isWindows
  * @returns {Promise<RawProc[]>}
  */
 export async function sample(isWindows) {
+  if (state.native !== false) {
+    try {
+      const rows = await sampleNative();
+      state.native = true;
+      return rows;
+    } catch (err) {
+      // Already proven to work: this is a real failure, not an old host, and
+      // the caller keeps its last good tree rather than spawning a shell.
+      if (state.native === true) throw err;
+      state.native = false;
+      // `warn`, not `info`: info is dropped in release builds, and the most
+      // likely reason to land here on a CURRENT TEDI is that the update ran
+      // without `invoke:process_sample` being granted - a silent fallback to
+      // spawning PowerShell is exactly the thing worth seeing in the log.
+      ctx?.logger?.warn?.("no native process table on this TEDI; using the shell sampler", err);
+    }
+  }
   const command = isWindows ? WIN_SAMPLE : UNIX_SAMPLE;
   const out = await ctx?.invoke("shell_run_command", { command, cwd: null, timeoutSecs: 20 });
   const stdout = String(out?.stdout ?? "");
@@ -230,6 +275,8 @@ export function dropSelf(rows) {
  * @param {boolean} isWindows
  */
 export async function readTotalMemory(isWindows) {
+  // The native sample already carried it: no shell call at all.
+  if (state.totalMem > 0) return state.totalMem;
   const command = isWindows
     ? `${WIN_PREFIX}(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory`
     : `${UNIX_PREFIX} sysctl -n hw.memsize 2>/dev/null || awk '/MemTotal/{print $2*1024;exit}' /proc/meminfo 2>/dev/null || echo 0`;

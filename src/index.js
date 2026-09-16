@@ -14,14 +14,16 @@
 // over seven WebView2 processes sharing one set of Chromium DLLs came out up to
 // 2x too big. See WIN_FULL in procs.js.
 //
-// Two sampling modes, because the cost of reading the process table is all in
-// the process you spawn to read it:
+// Sampling costs whatever the process you spawn to read the table costs, so on
+// TEDI 0.4.61 and later it spawns nothing: the host reads the table itself
+// (`process_sample`) in about 10 ms, and a pane can have a fresh tree every
+// second for less than the old status-bar figure cost. On an older host the two
+// shell modes below are still there:
 //   - pane open  -> a live sampler (`stream.js`), one block a second from one
-//                   long-lived shell, ~5.4% of a core;
-//   - meter only -> a one-shot every 30 s, and nothing at all while the window
-//                   is hidden.
-// The one-shot also stands in whenever the sampler cannot run, so nothing here
-// depends on it. Nothing is killed, written or sent anywhere - only read.
+//                   long-lived PowerShell, ~120 MB and 5-18% of a core (more
+//                   processes on the machine, more CPU);
+//   - meter only -> a one-shot every 30 s, each paying ~600 ms of start-up.
+// Nothing is killed, written or sent anywhere - only read.
 
 /** @typedef {import("../tedi").ExtensionContext} ExtensionContext */
 
@@ -51,6 +53,10 @@ const IDLE_MS = 30_000;
  *  ~600 ms of a core on Windows before it reads a single row, so this is as
  *  fast as the fallback can be without becoming the thing it measures. */
 const OPEN_MS = 5_000;
+/** ...and with a pane open on a host that reads the table itself. Same cadence
+ *  the live sampler used to give, for ~10 ms of one core per tick and no
+ *  process at all. */
+const NATIVE_MS = 1_000;
 /** The live sampler is presumed wedged if nothing arrives in this long, and
  *  the one-shot takes over. */
 const STREAM_STALE_MS = 15_000;
@@ -93,11 +99,15 @@ export async function activate(context) {
   void start();
 }
 
-/** First sample, off the activation path. */
+/** First sample, off the activation path. The sample comes FIRST because the
+ *  native one carries the machine's RAM with it, which is a whole shell spawn
+ *  `readTotalMemory` then does not have to make on the old path. */
 async function start() {
+  await poll();
+  if (!state.active) return;
   totalMem = await readTotalMemory(isWindows());
   if (!state.active) return;
-  await poll();
+  render(state.last, totalMem);
   await arm();
 }
 
@@ -114,6 +124,8 @@ export async function deactivate() {
   state.history = [];
   state.error = null;
   state.streamDead = false;
+  state.native = null;
+  state.totalMem = 0;
   state.onOpen = null;
   state.onRefresh = null;
   state.onArm = null;
@@ -173,7 +185,12 @@ async function arm() {
 
 async function armOnce() {
   if (!state.active) return;
-  const wantStream = state.views.size > 0 && !document.hidden && !state.streamDead;
+  // `state.native === false` and not merely falsy: until the first sample has
+  // answered we do not yet know whether this host needs a shell, and guessing
+  // wrong here spawns a PowerShell that the next tick would only have to kill -
+  // which is exactly what happens at boot with a Processes pane restored.
+  const wantStream =
+    state.native === false && state.views.size > 0 && !document.hidden && !state.streamDead;
   if (wantStream && !state.stream) {
     if (!(await stream.start(isWindows(), onBlock))) state.streamDead = true;
   } else if (!wantStream && state.stream) {
@@ -181,7 +198,14 @@ async function armOnce() {
   }
   if (!state.active) return;
   // While the sampler runs, the timer is only its watchdog (see `poll`).
-  const want = state.stream || state.views.size === 0 ? IDLE_MS : OPEN_MS;
+  const open = state.views.size > 0;
+  const want = state.native
+    ? open
+      ? NATIVE_MS
+      : IDLE_MS
+    : state.stream || !open
+      ? IDLE_MS
+      : OPEN_MS;
   if (state.timer && state.timerMs === want) return;
   clearTimer();
   state.timerMs = want;

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.2.0
+
+- **The pane no longer runs a PowerShell to watch your processes.** TEDI 0.4.61
+  reads the process table in its own host (`process_sample`, backed by Rust's
+  `sysinfo` plus the Windows EX2 memory counters), so the extension asks for it
+  over one IPC call instead of spawning a shell to print it. Measured on one
+  machine with 311 processes, both sampling once a second: the shell loop cost
+  **122 MB of working set and 17.8% of one core**; the host's own reader costs
+  **1.4% of one core and no process at all**. The status-bar figure stops paying
+  ~600 ms of PowerShell start-up every 30 seconds for the same reason.
+- **A pane open now refreshes every second instead of every four**, because a
+  full sample is ~10 ms rather than ~163 ms. Memory and CPU move together again,
+  so there is no longer a fast CPU block and a slow memory block to reconcile.
+- **The machine's RAM rides along with the sample**, so the one extra shell call
+  the status bar used to make at activation to read it is gone too.
+- Same numbers as before: private working set on Windows, RSS on macOS and
+  Linux, cumulative CPU normalised over every core. The cross-platform reader
+  was compile-checked for Windows, Linux and macOS.
+- **On a TEDI older than 0.4.61 nothing changes** - the shell sampler is still
+  there and takes over when `process_sample` is missing, which is also what
+  happens if the update is approved without its new `invoke:process_sample`
+  permission. That fallback now logs at `warn`, so a refused permission is
+  visible instead of silently costing you a PowerShell.
+
 ## 0.1.6
 
 - **The status-bar hover's chart was reading as cut off on the right, and the
