@@ -23,7 +23,8 @@
 //                   long-lived PowerShell, ~120 MB and 5-18% of a core (more
 //                   processes on the machine, more CPU);
 //   - meter only -> a one-shot every 30 s, each paying ~600 ms of start-up.
-// Nothing is killed, written or sent anywhere - only read.
+// Nothing is written or sent anywhere. The one thing that ever kills is the AI
+// tool's explicit `kill` action, see ai.js.
 
 /** @typedef {import("../tedi").ExtensionContext} ExtensionContext */
 
@@ -43,6 +44,7 @@ import { render, removeItem } from "./statusbar.js";
 import { mount, repaintViews, removeStyles } from "./panel.js";
 import { CHART_MS } from "./chart.js";
 import * as stream from "./stream.js";
+import { registerAiTool } from "./ai.js";
 
 const PANEL_ID = "processes";
 const CMD_OPEN = "tedi.process-monitor.open";
@@ -78,6 +80,7 @@ export async function activate(context) {
   state.onOpen = openPane;
   state.onRefresh = refreshNow;
   state.onArm = () => void arm();
+  registerAiTool();
 
   context.registerCommandHandler(CMD_OPEN, openPane);
   context.addDisposer(context.registerPanelRenderer(PANEL_ID, (container) => mount(container)));

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- **AI tool `process_monitor`.** `list` returns the top processes by memory or CPU, with image names only. `kill` ends one process in TEDI's tree, needs `confirm: true`, and refuses TEDI's own.
+
 ## 0.2.0
 
 - **The pane no longer runs a PowerShell to watch your processes.** TEDI 0.4.61

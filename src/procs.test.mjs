@@ -25,6 +25,7 @@ import {
   scriptToken,
   fmtBytes,
   ownRss,
+  isTediOwn,
 } from "./procs.js";
 import { takeBlocks, latest } from "./stream.js";
 import { pixelSeries, CHART_MS, TIP_COLS } from "./chart.js";
@@ -263,6 +264,15 @@ assert.ok(
   "an agent is never counted as TEDI",
 );
 assert.equal(ownRss([]), 0, "and an empty tree is zero, not NaN");
+
+// The AI tool's kill guard: TEDI's machinery is refused, what you started is not.
+for (const role of ["app", "daemon", "webview", "ext", "monitor"]) {
+  assert.ok(isTediOwn({ role, name: "x.exe" }), `${role} is never a kill target`);
+}
+assert.ok(isTediOwn({ role: "child", name: "conhost.exe" }), "nor is a ConPTY's conhost");
+for (const role of ["terminal", "agent", "child"]) {
+  assert.ok(!isTediOwn({ role, name: "node.exe" }), `${role} may be killed`);
+}
 
 // CPU rolls up the same way, summed then rounded once.
 const busyShown = collapse(later.nodes).find((n) => n.pid === 26788);

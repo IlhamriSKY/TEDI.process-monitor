@@ -220,7 +220,7 @@ one piece of TEDI's process shape this pane will not pretend away.
 
 | Permission                                                                             | Why                                                                                                        |
 | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `invoke:shell_run_command`                                                             | The one-shot process-table read.                                                                           |
+| `invoke:shell_run_command`                                                             | The one-shot process-table read, and the AI tool's `kill`.                                                 |
 | `invoke:shell_bg_spawn_direct` + `shell_bg_logs` + `shell_bg_kill` + `shell_bg_remove` | The live sampler while a pane is open: spawn it (argv only, no shell), drain its output, stop and reap it. |
 | `statusbar:write`                                                                      | The meter.                                                                                                 |
 | `panels:register` + `tabs:open`                                                        | The Processes pane.                                                                                        |
@@ -241,10 +241,17 @@ is POSIX and fish is not.
 
 ## Privacy
 
-Nothing leaves the machine and nothing is written. The extension only reads the
+Nothing leaves the machine and nothing is written. The pane only reads the
 process table, and it never kills, suspends or signals anything: the row is a
 readout, not a control. Command lines are shown in a row's tooltip and are
 truncated at 240 characters.
+
+The one exception is the `process_monitor` AI tool. `list` returns the top
+processes by memory or CPU, with image names only, never command lines. `kill`
+ends one pid from TEDI's tree, needs `confirm: true`, and refuses TEDI's own
+processes (the app, its WebView2 and PTY daemon, extension sidecars, a ConPTY's
+conhost). In the app it goes through the agent's approval flow; the `tedi` CLI and
+MCP route has no approval prompt.
 
 ## Development
 

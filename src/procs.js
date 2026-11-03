@@ -743,6 +743,15 @@ export function ownRss(nodes) {
 }
 
 /**
+ * Never a kill target: the application itself, an extension's sidecar, this
+ * pane's sampler, and the conhost a live terminal's ConPTY runs on.
+ * @param {ProcNode} n
+ */
+export function isTediOwn(n) {
+  return OWN_ROLES.has(n.role) || n.role === "ext" || n.role === "monitor" || CONHOST_RE.test(n.name);
+}
+
+/**
  * Snapshot the cumulative CPU counters for the next delta.
  * @param {RawProc[]} rows
  * @param {number} at
